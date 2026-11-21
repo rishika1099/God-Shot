@@ -1,7 +1,7 @@
 # S02: Extract (Argon → scene.v1; this IS the baseline)
 
 - **Owner:** Akash
-- **Status:** in review (live-tested; path-direction criterion 1/2, prompt untuned)
+- **Status:** merged (#7); follow-up (motion labels from the track + cut detection) in review. Path-direction criterion still 1/2, prompt untuned
 - **Depends on:** S00, S01
 - **Models:** `MODEL_EXTRACT` = gemini-4-argon, static video processing, `fps=cfg.FPS` (4), `thinking_level=MEDIUM`, JSON schema enforced
 
