@@ -3,7 +3,6 @@
 - **Owner:** Siva (`score.py`), Rishika (charts in `report.ipynb`)
 - **Status:** todo
 - **Depends on:** S03, S10, S06 (start against mocks + the first baseline runs)
-- **Target:** 5:00 (M2: numbers locked)
 - **Models:** none for scoring; `MODEL_VERIFY` only for the verifier-vs-human metric
 
 ## Goal
@@ -22,8 +21,8 @@ Turn runs + human labels into the slide numbers: baseline vs loop, verifier accu
 - `failures.md`: every failed label with a thumbnail (from S01) and the scene's claim; pick 4 for the gallery.
 
 ## Acceptance criteria
-- [ ] `python eval/run_all.py --split dev` + `score.py` produce `results.md` on the dev split by 3:45.
-- [ ] Test-split numbers produced after the freeze (≥ 4:00), with the freeze time written in results.md.
+- [ ] `python eval/run_all.py --split dev` + `score.py` produce `results.md` on the dev split.
+- [ ] Test-split numbers produced only after prompts and thresholds are frozen, with the freeze recorded in results.md.
 - [ ] Every number on the slides traces to `results.md`.
 
 ## Notes / changelog

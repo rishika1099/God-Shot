@@ -3,7 +3,6 @@
 - **Owner:** Siva
 - **Status:** todo
 - **Depends on:** S04, S01
-- **Target:** 2:45
 - **Models:** `MODEL_VERIFY` = gemini-decision-1 via `client.decisions.create` (`api_version="v1beta"`). VERIFY the request/response field names in the docs first.
 
 ## Goal

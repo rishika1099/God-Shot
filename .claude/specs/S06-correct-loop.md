@@ -3,7 +3,6 @@
 - **Owner:** Rishika
 - **Status:** todo
 - **Depends on:** S02, S05 (build against `mocks/checks_mock.json` until S05 lands)
-- **Target:** 3:30 (M1)
 - **Models:** `MODEL_CORRECT` = gemini-4-argon, `thinking_level=HIGH`; same video URI + failing frames as high-res image parts; JSON schema enforced
 
 ## Goal
