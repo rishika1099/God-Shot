@@ -84,15 +84,31 @@ function catmullRom2D(p0, p1, p2, p3, u) {
   return interp(B1, B2, t1, t2);
 }
 
-function extractWaypointsFromTrack(track, maxCtrl = 9) {
+function extractWaypointsFromTrack(track, maxCtrl = 9, markAuto = false) {
   const ks = sortedKeys(track);
-  if (ks.length <= maxCtrl) return clone(ks);
+  if (!ks.length) return [];
+  // Collapse redundant stationary keys so tripod shots don't stack 10 hidden pins on top of (0,0)
+  const pruned = [{ ...clone(ks[0]), auto: false }];
+  for (let i = 1; i < ks.length; i++) {
+    const k = ks[i], prev = pruned[pruned.length - 1];
+    const moved = Math.hypot(k.x - prev.x, k.y - prev.y) > 0.12;
+    const turned = Math.abs(wrap180(k.yaw_deg - prev.yaw_deg)) > 6;
+    if (moved || turned) pruned.push({ ...clone(k), auto: markAuto });
+  }
+  if (pruned.length <= maxCtrl) return pruned;
   const out = [];
   for (let i = 0; i < maxCtrl; i++) {
-    const idx = Math.round((i * (ks.length - 1)) / (maxCtrl - 1));
-    out.push(clone(ks[idx]));
+    const idx = Math.round((i * (pruned.length - 1)) / (maxCtrl - 1));
+    out.push(clone(pruned[idx]));
   }
   return out;
+}
+
+function clearFutureAutoWaypoints(afterIdx) {
+  // When user moves the camera at t, drop unedited baseline future pins so camera stays where you put it
+  // instead of snapping back to the original starting point!
+  const tCut = S.waypoints[afterIdx]?.t ?? 0;
+  S.waypoints = S.waypoints.filter((k, i) => i <= afterIdx || !k.auto || k.t <= tCut);
 }
 
 function bakeCameraCurve() {
@@ -100,46 +116,70 @@ function bakeCameraCurve() {
   S.waypoints = sortedKeys(S.waypoints);
   const wps = S.waypoints;
   if (wps.length === 0) return;
-  if (!S.curveMode || wps.length < 3) {
-    // Linear mode (or <3 points)
-    S.scene.camera.track = wps.map((k) => ({
-      t: roundN(k.t, 3), mmss: mmss(k.t), x: roundN(k.x, 4), y: roundN(k.y, 4), yaw_deg: roundN(wrap180(k.yaw_deg), 3),
-    }));
-    return;
-  }
+  const dur = roundN(S.orig?.clip.duration_s || wps[wps.length - 1].t, 3);
   const autoAim = $("autoAim")?.checked;
   const tid = lockedTargetId();
-  const baked = [];
-  for (let i = 0; i < wps.length - 1; i++) {
-    const a = wps[i], b = wps[i + 1];
-    const p1 = [a.x, a.y], p2 = [b.x, b.y];
-    const p0 = i > 0 ? [wps[i - 1].x, wps[i - 1].y] : [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
-    const p3 = i + 2 < wps.length ? [wps[i + 2].x, wps[i + 2].y] : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
-    const dt = b.t - a.t;
-    const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-    const steps = Math.max(4, Math.min(10, Math.ceil(Math.max(dt / 0.35, segLen * 2.2))));
-    for (let s = 0; s < steps; s++) {
-      const u = s / steps;
-      const t = roundN(lerp(a.t, b.t, u), 3);
-      const [x, y] = catmullRom2D(p0, p1, p2, p3, u);
-      let yaw = lerpAngle(a.yaw_deg, b.yaw_deg, u);
-      if (autoAim && tid) {
-        const tgt = entityPosAt(S.scene, tid, t);
-        if (tgt) yaw = yawTowards(x, y, tgt.x, tgt.y);
-      }
-      baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
+  const aimAt = (x, y, t, fallbackYaw) => {
+    if (autoAim && tid) {
+      const tgt = entityPosAt(S.scene, tid, t);
+      if (tgt) return yawTowards(x, y, tgt.x, tgt.y);
     }
+    return fallbackYaw;
+  };
+
+  let baked = [];
+  if (!S.curveMode || wps.length < 3) {
+    // Smoothly sample even 2-point moves so Look-At tracks cleanly along the line
+    if (wps.length === 1) {
+      const k = wps[0];
+      const yaw0 = aimAt(k.x, k.y, k.t, k.yaw_deg);
+      baked.push({ t: roundN(k.t, 3), mmss: mmss(k.t), x: roundN(k.x, 4), y: roundN(k.y, 4), yaw_deg: roundN(wrap180(yaw0), 3) });
+    } else {
+      for (let i = 0; i < wps.length - 1; i++) {
+        const a = wps[i], b = wps[i + 1];
+        const steps = Math.max(2, Math.min(8, Math.ceil((b.t - a.t) / 0.5)));
+        for (let s = 0; s < steps; s++) {
+          const u = s / steps, t = roundN(lerp(a.t, b.t, u), 3);
+          const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
+          const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u));
+          baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
+        }
+      }
+      const last = wps[wps.length - 1];
+      const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg);
+      baked.push({ t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4), yaw_deg: roundN(wrap180(lastYaw), 3) });
+    }
+  } else {
+    for (let i = 0; i < wps.length - 1; i++) {
+      const a = wps[i], b = wps[i + 1];
+      const p1 = [a.x, a.y], p2 = [b.x, b.y];
+      const p0 = i > 0 ? [wps[i - 1].x, wps[i - 1].y] : [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
+      const p3 = i + 2 < wps.length ? [wps[i + 2].x, wps[i + 2].y] : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
+      const dt = b.t - a.t;
+      const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+      const steps = Math.max(4, Math.min(10, Math.ceil(Math.max(dt / 0.35, segLen * 2.2))));
+      for (let s = 0; s < steps; s++) {
+        const u = s / steps;
+        const t = roundN(lerp(a.t, b.t, u), 3);
+        const [x, y] = catmullRom2D(p0, p1, p2, p3, u);
+        const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u));
+        baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
+      }
+    }
+    const last = wps[wps.length - 1];
+    const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg);
+    baked.push({
+      t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4),
+      yaw_deg: roundN(wrap180(lastYaw), 3),
+    });
   }
-  const last = wps[wps.length - 1];
-  let lastYaw = last.yaw_deg;
-  if (autoAim && tid) {
-    const tgt = entityPosAt(S.scene, tid, last.t);
-    if (tgt) lastYaw = yawTowards(last.x, last.y, tgt.x, tgt.y);
+
+  // Hold final camera position through end of clip (never snap back to Start!)
+  const tail = baked[baked.length - 1];
+  if (tail && tail.t < dur - 0.05) {
+    const endYaw = aimAt(tail.x, tail.y, dur, tail.yaw_deg);
+    baked.push({ t: dur, mmss: mmss(dur), x: tail.x, y: tail.y, yaw_deg: roundN(wrap180(endYaw), 3) });
   }
-  baked.push({
-    t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4),
-    yaw_deg: roundN(wrap180(lastYaw), 3),
-  });
   S.scene.camera.track = baked;
 }
 
@@ -238,7 +278,7 @@ async function openRun(id) {
   S.run = await api(`/api/run/${encodeURIComponent(id)}`);
   S.orig = S.run.scene;
   S.scene = clone(S.run.scene_edit || S.run.scene);
-  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
+  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9, !S.run.scene_edit);
   S.t = 0; S.sel.cam = null; S.sel.actor = null; S.undo = []; S.redo = [];
   S.lastOrbitAnchor = null; S.orbitRadius = null;
   const dur = S.orig.clip.duration_s;
@@ -896,11 +936,12 @@ function addKeyframeAt(wx, wy, t) {
   const tgt = ($("autoAim")?.checked ?? true) ? entityPosAt(S.scene, tid, t) : null;
   const yaw = tgt ? yawTowards(wx, wy, tgt.x, tgt.y) : camAt(S.scene, t).yaw;
   const nearIdx = S.waypoints.findIndex((k) => Math.abs(k.t - t) < 0.2);
-  const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(wx, 4), y: roundN(wy, 4), yaw_deg: roundN(yaw, 3) };
+  const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(wx, 4), y: roundN(wy, 4), yaw_deg: roundN(yaw, 3), auto: false };
   if (nearIdx >= 0) S.waypoints[nearIdx] = nk;
   else S.waypoints.push(nk);
   S.waypoints = sortedKeys(S.waypoints);
   S.sel.cam = S.waypoints.findIndex((k) => k.t === nk.t);
+  clearFutureAutoWaypoints(S.sel.cam);
   bakeCameraCurve();
   S.lastOrbitAnchor = null;
   syncHistoryButtons();
@@ -931,6 +972,22 @@ if ($("quickOrbit180")) $("quickOrbit180").onclick = () => {
   pushUndo(); buildOrbitTrack({ entityId: lockedTargetId() }, 180, S.orbitDir, S.orbitRadius);
 };
 if ($("quickDollyIn")) $("quickDollyIn").onclick = () => buildPushInTrack();
+if ($("closeLoopBtn")) $("closeLoopBtn").onclick = () => {
+  if (!S.scene || S.waypoints.length < 2) {
+    msg("Place at least 2 camera positions at different times first, then click Close Loop.");
+    return;
+  }
+  pushUndo();
+  const dur = roundN(S.orig.clip.duration_s, 3);
+  const first = S.waypoints[0];
+  // Remove any existing waypoint right at dur, then close smoothly back to Start!
+  S.waypoints = S.waypoints.filter((k) => k.t < dur - 0.15);
+  S.waypoints.push({ t: dur, mmss: mmss(dur), x: first.x, y: first.y, yaw_deg: first.yaw_deg, auto: false });
+  bakeCameraCurve();
+  syncHistoryButtons();
+  markDirty("Connected your camera waypoints smoothly back to Start (closed loop)!");
+  startMapPreview();
+};
 if ($("quickFlipDir")) $("quickFlipDir").onclick = () => {
   S.orbitDir *= -1;
   $("quickFlipDir").textContent = S.orbitDir > 0 ? "CCW ↺" : "CW ↻";
@@ -1053,7 +1110,7 @@ function draw() {
   // Actors
   for (const a of sc.actors) drawActor(a, P, V.s, dpr);
 
-  // Editable camera control waypoints (clean diamonds matching the timeline)
+  // Editable camera control waypoints (clean diamonds + timestamp labels matching the timeline)
   S.waypoints.forEach((k, i) => {
     const [px, py] = P(k.x, k.y);
     const isSel = i === S.sel.cam;
@@ -1071,9 +1128,10 @@ function draw() {
     ctx.fillRect(-sz, -sz, sz * 2, sz * 2);
     ctx.strokeRect(-sz, -sz, sz * 2, sz * 2);
     ctx.restore();
+    if (S.waypoints.length > 1) {
+      pillLabel(`${k.t.toFixed(k.t % 1 ? 1 : 0)}s`, px, py + 14 * dpr, dpr, isSel ? "#ffffff" : "#9beec1");
+    }
   });
-
-  if (camPx.length > 1) pillLabel("START", camPx[0][0], camPx[0][1] + 15 * dpr, dpr, "#3ee88b");
 
   // Camera FOV cone
   const hf = sc.camera.hfov_deg, len = 4.2, low = lowConfAt("camera", S.t);
@@ -1291,12 +1349,18 @@ function evPx(ev) { const r = canvas.getBoundingClientRect(), dpr = window.devic
 
 function ensureCamWaypointAt(t) {
   const nearIdx = S.waypoints.findIndex((k) => Math.abs(k.t - t) < 0.35);
-  if (nearIdx >= 0) return nearIdx;
+  if (nearIdx >= 0) {
+    S.waypoints[nearIdx].auto = false;
+    clearFutureAutoWaypoints(nearIdx);
+    return nearIdx;
+  }
   const c = camAt(S.scene, t);
-  const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(c.x, 4), y: roundN(c.y, 4), yaw_deg: roundN(c.yaw, 3) };
+  const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(c.x, 4), y: roundN(c.y, 4), yaw_deg: roundN(c.yaw, 3), auto: false };
   S.waypoints.push(nk);
   S.waypoints = sortedKeys(S.waypoints);
-  return S.waypoints.findIndex((k) => k.t === nk.t);
+  const idx = S.waypoints.findIndex((k) => k.t === nk.t);
+  clearFutureAutoWaypoints(idx);
+  return idx;
 }
 
 canvas.addEventListener("pointerdown", (ev) => {
@@ -1383,16 +1447,20 @@ canvas.addEventListener("pointermove", (ev) => {
   const d = S.drag, sc = S.scene, r = (v) => Math.round(v * 100) / 100;
   if (d.kind === "cam_wp") {
     const k = S.waypoints[d.index];
+    k.auto = false;
     k.x = r(wx); k.y = r(wy);
     if ($("autoAim")?.checked) {
       const tgt = entityPosAt(sc, lockedTargetId(), k.t);
       if (tgt) k.yaw_deg = r(yawTowards(k.x, k.y, tgt.x, tgt.y));
     }
+    clearFutureAutoWaypoints(d.index);
     bakeCameraCurve();
   } else if (d.kind === "cam_aim") {
     if ($("autoAim")?.checked) $("autoAim").checked = false;
     const k = S.waypoints[d.index];
+    k.auto = false;
     k.yaw_deg = r(yawTowards(k.x, k.y, wx, wy));
+    clearFutureAutoWaypoints(d.index);
     bakeCameraCurve();
   } else if (d.kind === "actor_key") {
     const a = sc.actors.find((x) => x.id === d.id);
@@ -1480,7 +1548,7 @@ $("textEdit").onclick = () => {
 $("reset").onclick = () => {
   pushUndo();
   S.scene = clone(S.orig);
-  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
+  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9, true);
   S.sel.cam = null; S.sel.actor = null; S.lastOrbitAnchor = null; S.playing = false;
   setActivePov(null);
   if ($("modeBanner")) $("modeBanner").textContent = "";
