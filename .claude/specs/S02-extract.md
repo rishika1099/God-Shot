@@ -3,7 +3,6 @@
 - **Owner:** Akash
 - **Status:** todo
 - **Depends on:** S00, S01
-- **Target:** 1:45
 - **Models:** `MODEL_EXTRACT` = gemini-4-argon, static video processing, `fps=cfg.FPS` (4), `thinking_level=MEDIUM`, JSON schema enforced
 
 ## Goal

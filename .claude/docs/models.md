@@ -16,7 +16,14 @@ All IDs are read from `.env` through `godshot/config.py`. **VERIFY each ID with 
 - Decisions wire format: noul = `{"type":"noul","instructions":str,"criteria":{"true_description","false_description"}}`; choice = `{"type":"choice","instructions":str,"criteria":{key: description}}` (2–255 options). Our `check.v1` keeps `options` and `Question.to_api()` maps it to `criteria`.
 - Decisions answers: noul → `noul` (our `p_yes`), choice → `probabilities` (our `choice_probs`) + `choice`; both carry `confidence`. Also a `score` question type exists (unused).
 - `types.ThinkingConfig(thinking_level=...)` accepts `MINIMAL | LOW | MEDIUM | HIGH | XHIGH`.
-- **Model IDs: NOT yet verified** (no API key on the S00 machine). Run `python -m godshot smoke` with the team `.env`; it prints every model ID containing `gemini-4`, `decision` or `omni`. Paste the list here and fix `.env.example` if any ID differs.
+- **Model IDs VERIFIED** with `python -m godshot smoke` (team key, 2026-11-21). All `.env.example` defaults exist:
+  - `models/gemini-4-argon` (EXTRACT, CORRECT): live call OK, 7.2 s for a one-word reply at `thinking_level=LOW`
+  - `models/gemini-4-hydrogen` (CHEAP)
+  - `models/gemini-decision-1` (VERIFY): live `noul` call OK, 0.7 s, p_yes=0.95 on an obvious yes
+  - `models/gemini-omni-1.2-flash` (RESHOOT)
+  - Also available, unused so far: `gemini-4-carbon`, `gemini-4-neon`, `gemini-omni-1.1-flash`, `gemini-omni-flash-preview`.
+  - `GODSHOT_MODEL_IMAGE` stays empty: no image model chosen yet (S07 stretch).
+- `generate_content` logs "AFC is enabled" (automatic function calling); harmless since we pass no tools.
 
 ## Notes and gotchas (from our research; verify)
 - Gemini 4: sampling params (temperature/top_p) are reportedly ignored. Control output with `thinking_level` + schema.
