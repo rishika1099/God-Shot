@@ -288,14 +288,22 @@ def _blockout_frame(
         seg = _clip_near([cam.to_cam((min(xs), gy, 0.0)), cam.to_cam((max(xs), gy, 0.0))])
         if len(seg) == 2:
             draw.line([cam.project(c) for c in seg], fill=(92, 95, 102), width=1)
-    # walls
-    for (x0, y0), (x1, y1) in zip(outline, outline[1:] + outline[:1], strict=True):
-        add(
-            [(x0, y0, 0.0), (x1, y1, 0.0), (x1, y1, WALL_H), (x0, y0, WALL_H)],
-            (176, 178, 184),
-            (120, 122, 128),
-            layer=walls,
-        )
+    # walls: split into ~1.2m vertical bays with alternating subtle grey shades so Omni sees clear
+    # background parallax and optical flow during orbits/pans instead of a blank flat wall
+    for w_idx, ((x0, y0), (x1, y1)) in enumerate(zip(outline, outline[1:] + outline[:1], strict=True)):
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        bays = max(1, min(12, round(seg_len / 1.2)))
+        for b in range(bays):
+            f0, f1 = b / bays, (b + 1) / bays
+            bx0, by0 = x0 + (x1 - x0) * f0, y0 + (y1 - y0) * f0
+            bx1, by1 = x0 + (x1 - x0) * f1, y0 + (y1 - y0) * f1
+            tone = (176, 178, 184) if (w_idx + b) % 2 == 0 else (154, 158, 166)
+            add(
+                [(bx0, by0, 0.0), (bx1, by1, 0.0), (bx1, by1, WALL_H), (bx0, by0, WALL_H)],
+                tone,
+                (118, 122, 130),
+                layer=walls,
+            )
     # objects
     for o in scene.objects:
         z0, z1 = OBJ_Z.get(o.type.lower(), (0.0, 1.0))
@@ -555,9 +563,10 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous shot, no cuts. Keep the room, the people's identities, and their clothing consistent "
-    "with the reference images, while strictly following EVERY camera movement, angle, behind-the-back "
-    "viewpoint, and actor position or turn shown in the blockout video."
+    "One continuous, fluid 24fps Steadicam shot — NO jump cuts, NO slideshow transitions. Keep the room, "
+    "each person's identity, hair, and clothing strictly separate and consistent with the reference images "
+    "(NEVER transfer props, gauntlets, hair, or sleeves between people), while strictly following EVERY "
+    "camera movement, angle, behind-the-back viewpoint, and actor position or turn in the blockout video."
 )
 
 
@@ -645,6 +654,34 @@ def _viewpoint_notes(
     return notes, has_back
 
 
+def _actor_facing_changes(scene: SceneV1, scene_orig: SceneV1 | None, dur: float) -> list[str]:
+    """Note when the user intentionally rotated an actor's facing_deg relative to scene_orig."""
+    if scene_orig is None or dur <= 0:
+        return []
+    orig_by_id = {a.id: a for a in scene_orig.actors}
+    notes: list[str] = []
+    t_mid = dur * 0.5
+    cam = geometry.interp_camera(scene, t_mid)
+    for a in scene.actors:
+        oa = orig_by_id.get(a.id)
+        if oa is None:
+            continue
+        ax, ay, f_new, vis = geometry.interp_actor(a, t_mid)
+        _, _, f_old, _ = geometry.interp_actor(oa, min(t_mid, scene_orig.clip.duration_s))
+        if not vis or abs(geometry.wrap180(f_new - f_old)) < 35.0:
+            continue
+        side = _actor_view_side(cam, ax, ay, f_new)
+        label = (
+            "facing toward the camera"
+            if side == "front"
+            else "turned away with their back to the camera"
+            if side == "back"
+            else "turned in side profile"
+        )
+        notes.append(f"{a.visual_description} is intentionally {label} (following the blockout orientation)")
+    return notes
+
+
 def describe_shot(
     scene_edited: SceneV1,
     duration_s: float | None = None,
@@ -677,9 +714,10 @@ def describe_shot(
     if f["actors"]:
         lines.append(f"Floor positions: {'; '.join(f['actors'])}.")
     vp_notes, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
-    if vp_notes:
-        lines.append("Camera viewpoint relative to actors (follow the blockout camera angle strictly):")
-        lines += vp_notes
+    face_notes = _actor_facing_changes(scene_edited, scene_orig, dur)
+    if vp_notes or face_notes:
+        lines.append("Camera viewpoint and actor facing (follow the blockout angle strictly):")
+        lines += vp_notes + face_notes
     if beats:
         lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
         lines += _beat_lines(beats, time_scale)
