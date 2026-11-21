@@ -639,16 +639,17 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
-// ------------------------------------------------------------------ Demo Mode: 360° Left Person → Zoom In Second Person
+// ------------------------------------------------------------------ Camera POV & Angle Presets (Scene Locked)
+function setActivePov(pov) {
+  document.querySelectorAll(".pov-btn").forEach((b) => b.classList.toggle("active", b.dataset.pov === pov));
+  if ($("demoBar")) $("demoBar").classList.toggle("show", pov === "demo360");
+}
+
 function updateDemoHUD() {
-  if (!S.demoMode || !S.demoMeta) return;
+  if (!S.demoMeta) return;
   const inPhase1 = S.t <= S.demoMeta.tSplit;
-  if ($("demoStep1")) {
-    $("demoStep1").className = "demo-step" + (inPhase1 ? " active-orbit" : "");
-  }
-  if ($("demoStep2")) {
-    $("demoStep2").className = "demo-step" + (!inPhase1 ? " active-zoom" : "");
-  }
+  if ($("demoStep1")) $("demoStep1").className = "demo-step" + (inPhase1 ? " active-orbit" : "");
+  if ($("demoStep2")) $("demoStep2").className = "demo-step" + (!inPhase1 ? " active-zoom" : "");
   const banner = $("modeBanner");
   if (banner) {
     banner.textContent = inPhase1
@@ -670,13 +671,11 @@ function applyDemoChoreography() {
   const rightPos0 = rightActor ? actorAt(rightActor, 0) : { x: 1.0, y: 2.5 };
   const sep = Math.hypot(rightPos0.x - leftPos0.x, rightPos0.y - leftPos0.y);
 
-  // Orbit radius clears the second actor while giving a clean full 360° hero loop around left person
   const rOrbit = sep > 0.4 ? Math.min(1.55, Math.max(0.85, sep * 0.78)) : 1.45;
   const tSplit = roundN(dur * 0.62, 3);
-  const startAngle = -Math.PI / 2; // starts in front (south) of the left person
+  const startAngle = -Math.PI / 2;
 
   const track = [];
-  // Phase 1 (0 -> tSplit): 24 smooth steps for full 360° orbit around left person
   const nOrbit = 24;
   for (let i = 0; i <= nOrbit; i++) {
     const f = i / nOrbit;
@@ -689,7 +688,6 @@ function applyDemoChoreography() {
     track.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
   }
 
-  // Phase 2 (tSplit -> dur): smooth curved swing + dramatic push-in zoom onto second person
   const exitKey = track[track.length - 1];
   const nZoom = 14;
   for (let i = 1; i <= nZoom; i++) {
@@ -699,7 +697,6 @@ function applyDemoChoreography() {
     const lp = leftActor ? actorAt(leftActor, t) : leftPos0;
     const rp = rightActor ? actorAt(rightActor, t) : rightPos0;
 
-    // Quadratic Bezier from orbit exit -> wide front framing of right person -> tight close-up in front of right person
     const p0 = [exitKey.x, exitKey.y];
     const p1 = [rp.x, rp.y - Math.max(1.55, rOrbit * 1.25)];
     const p2 = [rp.x, rp.y - 0.52];
@@ -707,7 +704,6 @@ function applyDemoChoreography() {
     const x = (1 - u) * (1 - u) * p0[0] + 2 * (1 - u) * u * p1[0] + u * u * p2[0];
     const y = (1 - u) * (1 - u) * p0[1] + 2 * (1 - u) * u * p1[1] + u * u * p2[1];
 
-    // Smoothly whip-aim from left person to second person in the first 30% of Phase 2, then stay locked
     const aimBlend = Math.min(1, f / 0.3);
     const yawL = yawTowards(x, y, lp.x, lp.y);
     const yawR = yawTowards(x, y, rp.x, rp.y);
@@ -726,11 +722,111 @@ function applyDemoChoreography() {
   };
   if ($("demoLeftName")) $("demoLeftName").textContent = leftId;
   if ($("demoRightName")) $("demoRightName").textContent = rightId;
+  setActivePov("demo360");
   S.t = 0;
   syncHistoryButtons();
-  msg(`Demo ready: 360° orbit on ${leftId} (0–${tSplit.toFixed(1)}s) → zoom in on ${rightId} (${tSplit.toFixed(1)}–${dur.toFixed(1)}s).`);
+  msg(`Angle preset: 360° orbit on ${leftId} → zoom in on ${rightId} (scene action stays locked).`);
   startMapPreview();
 }
+
+function applyPovPreset(pov) {
+  if (!S.scene || !S.orig) return;
+  pushUndo();
+  if (pov === "demo360") {
+    applyDemoChoreography();
+    return;
+  }
+  S.demoMeta = null;
+  setActivePov(pov);
+  const dur = S.orig.clip.duration_s;
+  const origCam0 = camAt(S.orig, 0);
+  const actorsByX = [...S.scene.actors].sort((a, b) => actorAt(a, 0).x - actorAt(b, 0).x);
+  const L0 = actorsByX[0] ? actorAt(actorsByX[0], 0) : { x: -0.8, y: 2.5 };
+  const R0 = actorsByX[1] ? actorAt(actorsByX[1], 0) : { x: 0.8, y: 2.5 };
+  const mid0 = { x: (L0.x + R0.x) / 2, y: (L0.y + R0.y) / 2 };
+
+  // Unit vector L -> R and side vector pointing toward original camera
+  const dx = R0.x - L0.x, dy = R0.y - L0.y, sep = Math.max(0.4, Math.hypot(dx, dy));
+  const ux = dx / sep, uy = dy / sep;
+  let nx = -uy, ny = ux;
+  if ((origCam0.x - mid0.x) * nx + (origCam0.y - mid0.y) * ny < 0) { nx = -nx; ny = -ny; }
+
+  const steps = Math.max(6, Math.ceil(dur / 1.0));
+  const track = [];
+  let newFov = S.orig.camera.hfov_deg;
+  let bannerText = "";
+
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps, t = roundN(dur * f, 3);
+    const L = actorsByX[0] ? actorAt(actorsByX[0], t) : L0;
+    const R = actorsByX[1] ? actorAt(actorsByX[1], t) : R0;
+    const mid = { x: (L.x + R.x) / 2, y: (L.y + R.y) / 2 };
+    const oc = camAt(S.orig, t);
+    let x = oc.x, y = oc.y, yaw = oc.yaw;
+
+    if (pov === "ots_lr") {
+      // Over Left Person's shoulder looking directly at Right Person
+      x = L.x - 0.85 * ux + 0.55 * nx;
+      y = L.y - 0.85 * uy + 0.55 * ny;
+      yaw = yawTowards(x, y, R.x, R.y);
+      newFov = 48;
+      bannerText = `Over-the-Shoulder · behind ${actorsByX[0]?.id || "left"} → ${actorsByX[1]?.id || "right"} (48° FOV)`;
+    } else if (pov === "ots_rl") {
+      // Over Right Person's shoulder looking directly at Left Person
+      x = R.x + 0.85 * ux + 0.55 * nx;
+      y = R.y + 0.85 * uy + 0.55 * ny;
+      yaw = yawTowards(x, y, L.x, L.y);
+      newFov = 48;
+      bannerText = `Over-the-Shoulder · behind ${actorsByX[1]?.id || "right"} → ${actorsByX[0]?.id || "left"} (48° FOV)`;
+    } else if (pov === "reverse") {
+      // 180° Reverse Angle: opposite side of the scene looking back across the actors
+      const rx = oc.x - mid.x, ry = oc.y - mid.y;
+      x = mid.x - rx;
+      y = mid.y - ry;
+      yaw = yawTowards(x, y, mid.x, mid.y);
+      newFov = Math.min(72, Math.max(48, S.orig.camera.hfov_deg));
+      bannerText = `Reverse 180° Angle · opposite side of set (${Math.round(newFov)}° FOV)`;
+    } else if (pov === "profile") {
+      // Clean lateral Side Profile seeing both people face-to-face
+      x = mid.x + (sep * 0.5 + 1.65) * ux + 0.35 * nx;
+      y = mid.y + (sep * 0.5 + 1.65) * uy + 0.35 * ny;
+      yaw = yawTowards(x, y, mid.x, mid.y);
+      newFov = 54;
+      bannerText = `Side Profile POV · lateral two-shot (54° FOV)`;
+    } else if (pov === "wide") {
+      // Wide POV establishing angle pulled further back with 95° wide lens
+      const fv = fwdVec(oc.yaw);
+      x = oc.x - fv[0] * 1.15;
+      y = oc.y - fv[1] * 1.15;
+      yaw = yawTowards(x, y, mid.x, mid.y);
+      newFov = 95;
+      bannerText = `Wide Establishing POV · pulled back on 95° ultra-wide lens`;
+    } else if (pov === "closeup") {
+      // Tight telephoto close-up framed on second person (or active Look-At target)
+      const tgt = entityPosAt(S.scene, lockedTargetId(), t) || R;
+      x = tgt.x + 1.15 * nx;
+      y = tgt.y + 1.15 * ny;
+      yaw = yawTowards(x, y, tgt.x, tgt.y);
+      newFov = 32;
+      bannerText = `Telephoto Close-Up · ${lockedTargetId() || "subject"} on 32° lens`;
+    }
+    track.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
+  }
+
+  S.scene.camera.hfov_deg = newFov;
+  S.scene.camera.track = track;
+  S.scene.camera.motion_segments = [{ t0: 0, t1: roundN(dur, 3), translation: "static", rotation: "none" }];
+  S.waypoints = extractWaypointsFromTrack(track, 5);
+  syncFovUI();
+  if ($("modeBanner")) $("modeBanner").textContent = bannerText;
+  syncHistoryButtons();
+  msg(`${bannerText}. Drag camera or adjust FOV, then hit Re-render or Re-shoot (Omni).`);
+  startMapPreview();
+}
+
+document.querySelectorAll(".pov-btn").forEach((b) => {
+  b.onclick = () => applyPovPreset(b.dataset.pov);
+});
 
 function setDemoMode(on) {
   S.demoMode = on;
@@ -738,20 +834,16 @@ function setDemoMode(on) {
   if ($("demoModeBtn")) {
     $("demoModeBtn").classList.toggle("active", on);
     $("demoModeBtn").setAttribute("aria-pressed", String(on));
-    $("demoModeBtn").textContent = on ? "★ Demo Mode (Switch to Editor)" : "★ Demo: 360° → Zoom";
+    $("demoModeBtn").textContent = on ? "Camera POV Studio (Switch to Full Editor)" : "Switch to Camera POV Studio";
   }
   if ($("brandTag")) {
     $("brandTag").textContent = on
-      ? "Demo Mode · 360° Left Person → Zoom In Second Person"
-      : "Video on left · Motion editor on right";
+      ? "Same scene · New camera angle, POV & FOV"
+      : "Full Editor · Camera curves, actors & verification checks";
   }
   resize();
-  if (on && S.scene) {
-    applyDemoChoreography();
-  } else if (!on) {
-    S.demoMeta = null;
-    if ($("modeBanner")) $("modeBanner").textContent = "";
-    msg("Full Motion Editor active — drag camera/actors directly or scrub keyframe tracks.");
+  if (!on) {
+    msg("Full Editor active — scene unlocked for keyframe tracks, custom curves, and verify checks.");
   }
 }
 
@@ -1147,8 +1239,8 @@ function draw() {
   ctx.strokeStyle = `rgba(${coneRGB},${low ? 0.25 : 0.5})`; ctx.lineWidth = 1.2 * dpr;
   line([cx, cy], pL); line([cx, cy], pR);
 
-  // Live Lens Aim Handle (hidden in clean Demo Mode, always visible in Editor Mode)
-  if (!S.demoMode) {
+  // Live Lens Aim Handle (always visible unless playing 2-phase demo, so user can freely rotate camera!)
+  if (!S.demoMeta) {
     const aimH = liveAimHandle(cam);
     const aimHov = S.hover?.kind === "cam_aim" || S.drag?.kind === "cam_aim";
     ctx.strokeStyle = aimHov ? "#ffffff" : "rgba(255,255,255,0.75)";
@@ -1295,6 +1387,9 @@ function hit(px, py) {
     if (near(...P(S.waypoints[i].x, S.waypoints[i].y), 12 * dpr)) return { kind: "cam_wp", index: i };
   }
 
+  // In Camera POV Studio mode, actors & props stay 🔒 locked so scene action never changes!
+  if (S.demoMode) return null;
+
   // 4. Live Actor Bodies (grab any actor directly!)
   for (const a of sc.actors) {
     const p = actorAt(a, S.t);
@@ -1376,6 +1471,7 @@ canvas.addEventListener("pointerdown", (ev) => {
 
   pushUndo();
   S.lastOrbitAnchor = null;
+  if (h.kind === "cam_live" || h.kind === "cam_aim" || h.kind === "cam_wp") { S.demoMeta = null; setActivePov(null); }
   if (h.kind === "cam_live") {
     const idx = ensureCamWaypointAt(S.t);
     S.sel.cam = idx;
@@ -1538,9 +1634,11 @@ $("reset").onclick = () => {
   pushUndo();
   S.scene = clone(S.orig);
   S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
-  S.sel.cam = null; S.sel.actor = null; S.lastOrbitAnchor = null; S.playing = false;
+  S.sel.cam = null; S.sel.actor = null; S.lastOrbitAnchor = null; S.demoMeta = null; S.playing = false;
+  setActivePov(null);
+  if ($("modeBanner")) $("modeBanner").textContent = "";
   syncFovUI(); setVideo(S.run.reel_url || S.run.clip_url); syncHistoryButtons();
-  msg("Back to the verified scene (edits on disk are kept).");
+  msg("Reset to the original verified camera angle & FOV.");
 };
 $("reshoot").onclick = async () => {
   try { const { job_id } = await post(`/api/run/${S.runId}/reshoot`, { scene: S.scene }); watchJob(job_id); }
@@ -1579,7 +1677,7 @@ function watchJob(id) {
 $("runSelect").onchange = (e) => openRun(e.target.value);
 
 // ------------------------------------------------------------------ boot
-if ($("demoModeBtn") && S.demoMode) $("demoModeBtn").textContent = "★ Demo Mode (Switch to Editor)";
+if ($("demoModeBtn") && S.demoMode) $("demoModeBtn").textContent = "Camera POV Studio (Switch to Full Editor)";
 resize();
 loadRuns().catch((e) => msg(e.message, true));
 requestAnimationFrame(tick);

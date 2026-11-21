@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>God-Shot · Cinema Motion Editor</title>
+  <title>God-Shot · Camera POV &amp; Angle Studio</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="demo-mode">
@@ -20,12 +20,12 @@
     </span>
     <div class="brand-text">
       <h1 class="brand">God-Shot</h1>
-      <span class="tag" id="brandTag">Demo Mode · 360° Left Person → Zoom In Second Person</span>
+      <span class="tag" id="brandTag">Same scene · New camera angle, POV &amp; FOV</span>
     </div>
   </div>
 
   <div class="controls">
-    <button id="demoModeBtn" type="button" class="btn btn-demo active" aria-pressed="true">★ Demo: 360° → Zoom</button>
+    <button id="demoModeBtn" type="button" class="btn btn-demo active" aria-pressed="true">Camera POV Studio (Switch to Full Editor)</button>
     <div class="run-picker">
       <label for="runSelect" class="picker-label">Clip</label>
       <select id="runSelect"></select>
@@ -42,15 +42,15 @@
 </header>
 
 <main id="workspace" tabindex="-1">
-  <!-- LEFT COLUMN: VIDEO MONITOR + VERIFY LOOP -->
+  <!-- LEFT COLUMN: VIDEO MONITOR -->
   <section class="left">
     <div class="panel stage-panel">
       <div class="panel-head">
         <div class="head-left">
-          <h2>Video Monitor</h2>
+          <h2>Original / Output Video</h2>
           <span id="segLabel" class="seg"></span>
         </div>
-        <span class="muted-meta">Scrub below or on the keyframe tracks →</span>
+        <span class="muted-meta">Scene action stays identical</span>
       </div>
 
       <div class="player">
@@ -61,7 +61,7 @@
               <rect x="3" y="5" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6"/>
               <path d="M17 10l4-2.5v9L17 14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
             </svg>
-            <p>No video yet for this run. Hit Play to watch the motion path on the right.</p>
+            <p>No video yet for this run. Hit Play to watch the camera POV preview on the right.</p>
           </div>
         </div>
       </div>
@@ -74,6 +74,7 @@
       </div>
     </div>
 
+    <!-- Verify Loop (visible in Full Editor mode) -->
     <div class="panel card verify-card editor-only">
       <div class="panel-head">
         <div class="head-left">
@@ -94,24 +95,37 @@
     </div>
   </section>
 
-  <!-- RIGHT COLUMN: VIDEO-EDITOR MOTION STAGE + KEYFRAME TIMELINE -->
+  <!-- RIGHT COLUMN: CAMERA ANGLE, POV & FOV RESHOOT STUDIO -->
   <section class="right">
     <div class="panel mapwrap playground-panel">
       <div class="panel-head">
         <div class="head-left">
-          <h2>Motion Stage (Top-Down)</h2>
+          <h2>Camera Angle &amp; POV Studio</h2>
+          <span class="lock-pill" title="Actors and props stay fixed so the same scene plays from your new camera angle">🔒 Scene Locked</span>
           <span id="keyTelemetry" class="mono key-telemetry"></span>
         </div>
-        <div class="head-actions editor-only">
-          <button id="curveToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Smooth curved motion path (Catmull-Rom spline)">Smooth Curves</button>
+        <div class="head-actions">
+          <button id="replayDemoBtn" type="button" class="btn ghost xs">↻ Replay</button>
+          <button id="curveToggle" type="button" class="btn ghost xs active-pill editor-only" aria-pressed="true">Smooth Curves</button>
           <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo edit">↶ Undo</button>
-          <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo edit">↷ Redo</button>
+          <button id="redoBtn" type="button" class="btn ghost xs editor-only" disabled aria-label="Redo edit">↷ Redo</button>
         </div>
       </div>
 
-      <!-- Demo Mode 2-Step Storyboard Bar -->
+      <!-- 1-Click Camera Angle & POV Presets (ALWAYS VISIBLE) -->
+      <div class="pov-strip" role="group" aria-label="Camera angle and POV presets">
+        <button id="povDemo360" type="button" class="pov-btn pov-hero active" data-pov="demo360">★ 360° → Zoom</button>
+        <button id="povOtsLR" type="button" class="pov-btn" data-pov="ots_lr">Over-Shoulder L→R</button>
+        <button id="povOtsRL" type="button" class="pov-btn" data-pov="ots_rl">Over-Shoulder R→L</button>
+        <button id="povReverse" type="button" class="pov-btn" data-pov="reverse">Reverse 180°</button>
+        <button id="povProfile" type="button" class="pov-btn" data-pov="profile">Side Profile</button>
+        <button id="povWide" type="button" class="pov-btn" data-pov="wide">Wide POV 95°</button>
+        <button id="povCloseup" type="button" class="pov-btn" data-pov="closeup">Close-Up 32°</button>
+      </div>
+
+      <!-- Live 2-Step Storyboard Bar (shown when 360° → Zoom demo is active) -->
       <div id="demoBar" class="demo-bar" aria-live="polite">
-        <div id="demoStep1" class="demo-step active">
+        <div id="demoStep1" class="demo-step active-orbit">
           <span class="demo-num">1</span>
           <span><strong>360° Orbit</strong> · <span id="demoLeftName">Left person</span></span>
         </div>
@@ -120,13 +134,12 @@
           <span class="demo-num">2</span>
           <span><strong>Zoom In</strong> · <span id="demoRightName">Second person</span></span>
         </div>
-        <button id="replayDemoBtn" type="button" class="btn ghost xs">↻ Replay</button>
       </div>
 
-      <!-- Direct-Manipulation Tool Bar -->
+      <!-- Full Editor Mode Extra Tool Bar -->
       <div class="tool-strip editor-only" role="toolbar" aria-label="Motion stage tools">
         <div class="tool-group" role="group" aria-label="Interaction mode">
-          <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Move Camera &amp; Actors</button>
+          <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Drag Camera</button>
           <button id="toolDraw" type="button" class="tool-btn" data-tool="draw" aria-pressed="false">Draw Curve</button>
           <button id="toolOrbit" type="button" class="tool-btn" data-tool="orbit" aria-pressed="false">Orbit Tool</button>
         </div>
@@ -157,24 +170,24 @@
         <div id="hoverTip" class="hover-tip" aria-hidden="true"></div>
       </div>
 
-      <!-- VIDEO-EDITOR MULTI-TRACK KEYFRAME TIMELINE -->
-      <div class="kf-editor editor-only">
-        <div class="kf-header">
-          <span class="kf-title">Keyframe Tracks</span>
-          <div class="kf-controls">
-            <div class="seg-toggle" role="group" aria-label="Actor drag behavior">
-              <button id="actorModeKey" type="button" class="seg-btn active" aria-pressed="true" title="Dragging an actor sets a keyframe at current time (animates walking)">Actor: Animate @ t</button>
-              <button id="actorModeAll" type="button" class="seg-btn" aria-pressed="false" title="Dragging an actor moves their position across the entire shot">Reposition All</button>
-            </div>
-            <button id="addKeyBtn" type="button" class="btn ghost xs">+ Cam Key</button>
-            <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>
+      <!-- Always-visible Lens FOV Slider (so POV / FOV tweaking is 1 drag away!) -->
+      <div class="fov-bar">
+        <div class="slider-chip fov-main">
+          <label for="fov">
+            <span>Camera Lens FOV <span class="muted-meta">(drag camera or lens handle on map to adjust angle)</span></span>
+            <span class="mono"><span id="fovVal">60</span>°</span>
+          </label>
+          <input id="fov" type="range" min="20" max="110" step="1">
+          <div class="slider-scale mono" aria-hidden="true">
+            <span>20° Tight Close-Up</span>
+            <span>50° Cinema</span>
+            <span>95° Wide POV</span>
           </div>
         </div>
-        <div id="kfTracks" class="kf-tracks" aria-label="Camera and actor keyframe tracks"></div>
       </div>
 
-      <!-- 3 Clean Live Sliders -->
-      <div id="orbitBar" class="orbit-bar editor-only">
+      <!-- Extra Orbit Sliders (Full Editor only) -->
+      <div id="orbitBar" class="orbit-bar two-col editor-only">
         <div class="slider-chip">
           <label for="orbitSweep">Orbit Sweep <span id="orbitSweepVal" class="mono">360°</span></label>
           <input id="orbitSweep" type="range" min="45" max="720" step="15" value="360">
@@ -183,21 +196,33 @@
           <label for="orbitRadius">Orbit Radius <span id="orbitRadiusVal" class="mono">3.0u</span></label>
           <input id="orbitRadius" type="range" min="0.8" max="8" step="0.1" value="3">
         </div>
-        <div class="slider-chip">
-          <label for="fov">Lens FOV <span class="mono"><span id="fovVal">60</span>°</span></label>
-          <input id="fov" type="range" min="20" max="110" step="1">
+      </div>
+
+      <!-- Video-Editor Multi-Track Keyframe Timeline (Full Editor only) -->
+      <div class="kf-editor editor-only">
+        <div class="kf-header">
+          <span class="kf-title">Keyframe Tracks</span>
+          <div class="kf-controls">
+            <div class="seg-toggle" role="group" aria-label="Actor drag behavior">
+              <button id="actorModeKey" type="button" class="seg-btn active" aria-pressed="true">Actor: Animate @ t</button>
+              <button id="actorModeAll" type="button" class="seg-btn" aria-pressed="false">Reposition All</button>
+            </div>
+            <button id="addKeyBtn" type="button" class="btn ghost xs">+ Cam Key</button>
+            <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>
+          </div>
         </div>
+        <div id="kfTracks" class="kf-tracks" aria-label="Camera and actor keyframe tracks"></div>
       </div>
 
       <!-- Primary Render & Re-shoot Actions -->
       <div class="row buttons primary-actions">
         <button id="rerender" type="button" class="btn primary">Re-render Map &amp; Reel</button>
-        <button id="reshoot" type="button" class="btn omni">Re-shoot (Omni)</button>
-        <button id="reset" type="button" class="btn ghost">Reset</button>
+        <button id="reshoot" type="button" class="btn omni">Re-shoot New Angle (Omni)</button>
+        <button id="reset" type="button" class="btn ghost">Reset Angle</button>
       </div>
       <div id="msg" class="msg" role="status" aria-live="polite"></div>
 
-      <!-- Optional Advanced / Text Drawer -->
+      <!-- Optional Advanced / Text Drawer (Full Editor only) -->
       <details class="advanced-drawer editor-only">
         <summary>Precision segment &amp; optional text edit</summary>
         <div class="drawer-body">
