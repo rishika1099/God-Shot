@@ -105,7 +105,9 @@ def probe(clip: Path, check_length: bool = True) -> Clip:
         raise IngestError(f"no video stream in {clip}")
     st = streams[0]
     fps = _parse_rate(st.get("avg_frame_rate")) or _parse_rate(st.get("r_frame_rate"))
-    duration = float(info.get("format", {}).get("duration") or st.get("duration") or 0)
+    # Prefer the VIDEO stream duration: the container is often longer when audio runs past the last frame
+    # (Omni outputs: video 5.000 s, container 5.035 s), and frames past the video end don't exist.
+    duration = float(st.get("duration") or info.get("format", {}).get("duration") or 0)
     if fps <= 0 or duration <= 0:
         raise IngestError(f"could not read fps/duration from {clip} (fps={fps}, duration={duration})")
 

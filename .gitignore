@@ -10,3 +10,5 @@ frames/
 .DS_Store
 .ipynb_checkpoints/
 eval/camerabench/videos/
+*.egg-info/
+.tmp/
