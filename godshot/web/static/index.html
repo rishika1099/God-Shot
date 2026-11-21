@@ -3,90 +3,265 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>God-Shot</title>
+  <title>God-Shot · Camera Angle &amp; POV Studio</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <div class="brand">God-Shot <span class="tag">shot → verified blocking map</span></div>
+<a href="#workspace" class="skip-link visually-hidden">Skip to workspace</a>
+
+<header class="topbar">
+  <div class="brand-group">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 28 28" width="24" height="24" fill="none">
+        <rect x="2.5" y="2.5" width="23" height="23" rx="6" stroke="currentColor" stroke-width="1.75" opacity="0.45"/>
+        <path d="M8.5 14h3m5 0h3M14 8.5v3m0 5v3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+        <circle cx="14" cy="14" r="3" fill="#3ee88b"/>
+      </svg>
+    </span>
+    <div class="brand-text">
+      <h1 class="brand">God-Shot</h1>
+      <span class="tag">Same scene · New camera angle, POV &amp; FOV</span>
+    </div>
+  </div>
+
   <div class="controls">
-    <select id="runSelect" title="Cached runs"></select>
-    <label class="btn" id="uploadLabel">Upload clip<input type="file" id="upload" accept="video/*" hidden></label>
-    <span id="badges"></span>
+    <div class="run-picker">
+      <label for="runSelect" class="picker-label">Clip</label>
+      <select id="runSelect"></select>
+    </div>
+    <label class="btn btn-upload" id="uploadLabel" for="upload">
+      <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none">
+        <path d="M8 11V3.5m0 0L4.75 6.75M8 3.5l3.25 3.25M3 12.5h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Upload clip</span>
+      <input type="file" id="upload" accept="video/*" class="visually-hidden">
+    </label>
+    <div id="badges" class="badges" aria-live="polite"></div>
   </div>
 </header>
 
-<main>
+<main id="workspace" tabindex="-1">
+  <!-- LEFT COLUMN: VIDEO MONITOR + VERIFY LOOP -->
   <section class="left">
-    <div class="player">
-      <video id="video" controls muted playsinline></video>
-      <div id="noVideo" class="empty">No clip or reel for this run yet. The map below still plays.</div>
+    <div class="panel stage-panel">
+      <div class="panel-head">
+        <div class="head-left">
+          <h2>Video Monitor</h2>
+          <span id="segLabel" class="seg"></span>
+        </div>
+        <span class="muted-meta">Synced to camera board →</span>
+      </div>
+
+      <div class="player">
+        <video id="video" controls muted playsinline></video>
+        <div id="noVideo" class="empty">
+          <div class="empty-inner">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none">
+              <rect x="3" y="5" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M17 10l4-2.5v9L17 14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            </svg>
+            <p>No video yet for this run. Hit Play to preview the camera path on the right.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <button id="play" type="button" class="btn icon-btn" aria-label="Play or pause">▶</button>
+        <input type="range" id="time" min="0" max="10" step="0.01" value="0" aria-label="Playback time">
+        <span id="timeLabel" class="mono timecode">00:00.000</span>
+        <button id="loopToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Loop playback">Loop</button>
+      </div>
     </div>
-    <div class="timeline">
-      <button id="play" class="btn small">▶</button>
-      <input type="range" id="time" min="0" max="10" step="0.01" value="0">
-      <span id="timeLabel" class="mono">00:00.000</span>
-      <span id="segLabel" class="seg"></span>
-    </div>
-    <div class="mapwrap">
-      <canvas id="map"></canvas>
-      <div class="legend">drag <b>green dots</b> = camera keys · <b>ring</b> = yaw of selected key ·
-        drag actors' dots / objects · dashed grey = original path</div>
+
+    <div class="panel card verify-card">
+      <div class="panel-head">
+        <div class="head-left">
+          <h2>Verify Loop</h2>
+          <span id="passPill" class="pass-pill"></span>
+        </div>
+        <span id="lowconfCount" class="muted-meta"></span>
+      </div>
+      <div id="rounds" class="tabs" role="tablist" aria-label="Verification rounds"></div>
+      <div id="roundBar" class="progress-bar" aria-hidden="true"></div>
+      <div id="roundStats" class="stats"></div>
+      <div id="roundChanges" class="round-changes" hidden></div>
+      <ul id="checks" class="checks" role="list"></ul>
+      <details class="lowconf-drawer">
+        <summary>Low-confidence flags</summary>
+        <ul id="lowconf" class="lowconf" role="list"></ul>
+      </details>
     </div>
   </section>
 
+  <!-- RIGHT COLUMN: CAMERA ANGLE, POV & FOV STUDIO -->
   <section class="right">
-    <div class="card">
-      <h3>Verify loop</h3>
-      <div id="rounds" class="tabs"></div>
-      <div id="roundStats" class="stats"></div>
-      <ul id="checks" class="checks"></ul>
-    </div>
+    <div class="panel mapwrap playground-panel">
+      <div class="panel-head">
+        <div class="head-left">
+          <h2>Camera Angle &amp; POV Board</h2>
+          <span id="keyTelemetry" class="mono key-telemetry"></span>
+        </div>
+        <div class="head-actions">
+          <button id="sceneLockBtn" type="button" class="btn ghost xs" aria-pressed="false" title="Lock actors and props so only the camera moves">🔓 Actors Editable</button>
+          <button id="curveToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Smooth curved motion path">Smooth Curves</button>
+          <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo edit">↶ Undo</button>
+          <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo edit">↷ Redo</button>
+        </div>
+      </div>
 
-    <div class="card">
-      <h3>Low confidence</h3>
-      <ul id="lowconf" class="lowconf"></ul>
-    </div>
+      <!-- 1-Click Camera Angle & POV Presets -->
+      <div class="pov-strip" role="group" aria-label="Camera angle and POV presets">
+        <button id="povOtsLR" type="button" class="pov-btn" data-pov="ots_lr">Over-Shoulder L→R</button>
+        <button id="povOtsRL" type="button" class="pov-btn" data-pov="ots_rl">Over-Shoulder R→L</button>
+        <button id="povReverse" type="button" class="pov-btn" data-pov="reverse">Reverse 180°</button>
+        <button id="povProfile" type="button" class="pov-btn" data-pov="profile">Side Profile</button>
+        <button id="povWide" type="button" class="pov-btn" data-pov="wide">Wide POV 95°</button>
+        <button id="povCloseup" type="button" class="pov-btn" data-pov="closeup">Close-Up 32°</button>
+        <button id="quickOrbit360" type="button" class="pov-btn" title="Full 360° orbit around locked target">360° Orbit</button>
+      </div>
 
-    <div class="card">
-      <h3>Edit the shot</h3>
-      <div class="row">
-        <label>FOV <span id="fovVal" class="mono"></span>°</label>
-        <input type="range" id="fov" min="20" max="110" step="1">
+      <!-- Clean Mode & Target Bar -->
+      <div class="tool-strip" role="toolbar" aria-label="Camera board tools">
+        <div class="tool-group" role="group" aria-label="Interaction mode">
+          <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Drag Camera</button>
+          <button id="toolDraw" type="button" class="tool-btn" data-tool="draw" aria-pressed="false">Draw Curve</button>
+          <button id="toolOrbit" type="button" class="tool-btn" data-tool="orbit" aria-pressed="false">Orbit Tool</button>
+        </div>
+
+        <div class="tool-divider" aria-hidden="true"></div>
+
+        <div class="tool-group quick-moves" role="group" aria-label="Quick camera moves">
+          <button id="quickOrbit180" type="button" class="chip-btn">180° Arc</button>
+          <button id="quickDollyIn" type="button" class="chip-btn">Push In</button>
+          <button id="closeLoopBtn" type="button" class="chip-btn" title="Smoothly connect your last camera key back to Start">Close Loop</button>
+          <button id="quickFlipDir" type="button" class="chip-btn mono" title="Flip orbit direction">CCW ↺</button>
+        </div>
+
+        <div class="tool-group aim-group">
+          <label class="toggle-pill" for="autoAim">
+            <input id="autoAim" type="checkbox" checked>
+            <span>Look-At</span>
+          </label>
+          <label for="aimTarget" class="visually-hidden">Look-At subject</label>
+          <select id="aimTarget" class="compact-select"></select>
+        </div>
       </div>
-      <div class="row">
-        <select id="preset">
-          <option value="static">static</option>
-          <option value="dolly_in">dolly in</option>
-          <option value="dolly_out">dolly out</option>
-          <option value="truck_left">truck left</option>
-          <option value="truck_right">truck right</option>
-          <option value="pan_left">pan left</option>
-          <option value="pan_right">pan right</option>
-          <option value="arc_left">arc left (around actor)</option>
-          <option value="arc_right">arc right (around actor)</option>
-        </select>
-        <input id="t0" type="number" step="0.5" min="0" value="0" title="from (s)">
-        <input id="t1" type="number" step="0.5" min="0" value="4" title="to (s)">
-        <input id="amount" type="number" step="0.5" placeholder="amount" title="units or degrees (blank = default)">
-        <select id="target" title="arc target"></select>
-        <button id="applyPreset" class="btn small">Apply</button>
+
+      <!-- Interactive Top-Down Stage -->
+      <div class="canvas-frame">
+        <canvas id="map"></canvas>
+        <div id="modeBanner" class="mode-banner" aria-live="polite"></div>
+        <div id="hoverTip" class="hover-tip" aria-hidden="true"></div>
       </div>
-      <div class="row">
-        <input id="instruction" type="text" placeholder='e.g. "make it a slow arc to the right around the actor"'>
-        <button id="textEdit" class="btn small">Text edit</button>
+
+      <!-- Lens FOV Slider -->
+      <div class="fov-bar">
+        <div class="slider-chip fov-main">
+          <label for="fov">
+            <span>Camera Lens FOV <span class="muted-meta">(drag camera or lens ring on map to change angle)</span></span>
+            <span class="mono"><span id="fovVal">60</span>°</span>
+          </label>
+          <input id="fov" type="range" min="20" max="110" step="1">
+          <div class="slider-scale mono" aria-hidden="true">
+            <span>20° Tight Close-Up</span>
+            <span>50° Cinema</span>
+            <span>95° Wide POV</span>
+          </div>
+        </div>
       </div>
-      <div class="row buttons">
-        <button id="rerender" class="btn primary">Re-render</button>
-        <button id="reset" class="btn">Reset edits</button>
-        <button id="reshoot" class="btn">Re-shoot (Omni)</button>
+
+      <!-- Primary Render & Re-shoot Actions -->
+      <div class="row buttons primary-actions">
+        <button id="rerender" type="button" class="btn primary">Re-render Map &amp; Reel</button>
+        <button id="reshoot" type="button" class="btn omni">Re-shoot New Angle (Omni)</button>
+        <button id="reset" type="button" class="btn ghost">Reset Angle</button>
       </div>
-      <div id="msg" class="msg"></div>
+      <div id="msg" class="msg" role="status" aria-live="polite"></div>
+
+      <!-- Keyframe Tracks -->
+      <div class="kf-editor">
+        <div class="kf-header">
+          <span class="kf-title">Keyframe Tracks</span>
+          <div class="kf-controls">
+            <div class="seg-toggle" role="group" aria-label="Actor drag behavior">
+              <button id="actorModeKey" type="button" class="seg-btn active" aria-pressed="true">Actor: Animate @ t</button>
+              <button id="actorModeAll" type="button" class="seg-btn" aria-pressed="false">Reposition All</button>
+            </div>
+            <button id="addKeyBtn" type="button" class="btn ghost xs">+ Cam Key</button>
+            <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>
+          </div>
+        </div>
+        <div id="kfTracks" class="kf-tracks" aria-label="Camera and actor keyframe tracks"></div>
+      </div>
+
+      <!-- Optional Orbit Tuning & Segment / Text Drawer -->
+      <details class="advanced-drawer">
+        <summary>More controls (orbit sweep/radius, timed segment, text edit)</summary>
+        <div class="drawer-body">
+          <div id="orbitBar" class="orbit-bar two-col">
+            <div class="slider-chip">
+              <label for="orbitSweep">Orbit Sweep <span id="orbitSweepVal" class="mono">360°</span></label>
+              <input id="orbitSweep" type="range" min="45" max="720" step="15" value="360">
+            </div>
+            <div class="slider-chip">
+              <label for="orbitRadius">Orbit Radius <span id="orbitRadiusVal" class="mono">3.0u</span></label>
+              <input id="orbitRadius" type="range" min="0.8" max="8" step="0.1" value="3">
+            </div>
+          </div>
+
+          <div class="edit-section">
+            <span class="section-sub">Timed Move Segment</span>
+            <div class="preset-grid">
+              <div class="field field-wide">
+                <label for="preset">Move</label>
+                <select id="preset">
+                  <option value="static">Static</option>
+                  <option value="dolly_in">Dolly in</option>
+                  <option value="dolly_out">Dolly out</option>
+                  <option value="truck_left">Truck left</option>
+                  <option value="truck_right">Truck right</option>
+                  <option value="pan_left">Pan left</option>
+                  <option value="pan_right">Pan right</option>
+                  <option value="arc_left">Arc left (around target)</option>
+                  <option value="arc_right">Arc right (around target)</option>
+                </select>
+              </div>
+              <div class="field field-wide">
+                <label for="target">Arc target</label>
+                <select id="target"></select>
+              </div>
+              <div class="field">
+                <label for="t0">From (s)</label>
+                <input id="t0" type="number" step="0.5" min="0" value="0">
+              </div>
+              <div class="field">
+                <label for="t1">To (s)</label>
+                <input id="t1" type="number" step="0.5" min="0" value="4">
+              </div>
+              <div class="field">
+                <label for="amount">Amount</label>
+                <input id="amount" type="number" step="0.5" placeholder="auto">
+              </div>
+              <div class="field field-action">
+                <button id="applyPreset" type="button" class="btn small">Apply move</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="edit-section">
+            <label for="instruction" class="section-sub">Optional Text Instruction</label>
+            <div class="row prompt-row">
+              <input id="instruction" type="text" placeholder='e.g. "slow arc right around the actor"'>
+              <button id="textEdit" type="button" class="btn small">Text edit</button>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
   </section>
 </main>
 
-<img id="thumb" class="thumb" alt="">
+<img id="thumb" class="thumb" alt="Check frame preview">
 <script src="app.js"></script>
 </body>
 </html>
