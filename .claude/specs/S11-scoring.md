@@ -48,8 +48,8 @@ Turn runs + human labels into the slide numbers: baseline vs loop, verifier accu
     Pair times are clamped inside the clip (`duration_s` from clips.csv) because CameraBench labels span the clip.
   - CLI: `python eval/score.py summary --split dev` (baseline vs full accuracy in the terminal),
     `python eval/score.py vvh --split dev` (needs API key + ffmpeg).
-  - `run_all.py --split --system baseline|full [--force]`: 4 clips in parallel; baseline = S02 `extract` →
-    `scene_r0.json`, full = S06 `pipeline.run`. Skips clips that already have output; a failing clip is logged and
+  - `run_all.py --split --system baseline|full [--force]`: 4 clips in parallel; baseline = S02 `extract.baseline`
+    → `scene_r0.json` + loop_log round 0 (tokens, latency), full = S06 `pipeline.run`. Skips clips that already have output; a failing clip is logged and
     reported, never stops the rest; per-split report in `eval/runs/<system>/_run_<split>.json`.
   - Dry run: Rishika's 40 CameraBench test labels (`rishika/s10-eval-data`) load and score end to end.
   - Still open: real numbers need S02 + S06 merged, clips downloaded to `eval/clips/`, and own-clip layout labels.

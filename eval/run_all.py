@@ -41,9 +41,9 @@ def clips_for(split: str, csv_path: Path | None = None) -> list[dict[str, str]]:
 
 
 def _baseline(clip: Path, out_dir: Path) -> None:
-    from godshot.extract import extract  # S02
+    from godshot.extract import baseline  # S02: scene_r0.json + loop_log round 0
 
-    extract(clip).save(out_dir / OUTPUT["baseline"])
+    baseline(clip, out_dir)
 
 
 def _full(clip: Path, out_dir: Path) -> None:
