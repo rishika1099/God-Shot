@@ -6,7 +6,7 @@
   <title>God-Shot · Cinema Motion Editor</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="demo-mode">
 <a href="#workspace" class="skip-link visually-hidden">Skip to workspace</a>
 
 <header class="topbar">
@@ -20,11 +20,12 @@
     </span>
     <div class="brand-text">
       <h1 class="brand">God-Shot</h1>
-      <span class="tag">Video on left · Motion editor on right</span>
+      <span class="tag" id="brandTag">Demo Mode · 360° Left Person → Zoom In Second Person</span>
     </div>
   </div>
 
   <div class="controls">
+    <button id="demoModeBtn" type="button" class="btn btn-demo active" aria-pressed="true">★ Demo: 360° → Zoom</button>
     <div class="run-picker">
       <label for="runSelect" class="picker-label">Clip</label>
       <select id="runSelect"></select>
@@ -73,7 +74,7 @@
       </div>
     </div>
 
-    <div class="panel card verify-card">
+    <div class="panel card verify-card editor-only">
       <div class="panel-head">
         <div class="head-left">
           <h2>Verify Loop</h2>
@@ -101,15 +102,29 @@
           <h2>Motion Stage (Top-Down)</h2>
           <span id="keyTelemetry" class="mono key-telemetry"></span>
         </div>
-        <div class="head-actions">
+        <div class="head-actions editor-only">
           <button id="curveToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Smooth curved motion path (Catmull-Rom spline)">Smooth Curves</button>
           <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo edit">↶ Undo</button>
           <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo edit">↷ Redo</button>
         </div>
       </div>
 
+      <!-- Demo Mode 2-Step Storyboard Bar -->
+      <div id="demoBar" class="demo-bar" aria-live="polite">
+        <div id="demoStep1" class="demo-step active">
+          <span class="demo-num">1</span>
+          <span><strong>360° Orbit</strong> · <span id="demoLeftName">Left person</span></span>
+        </div>
+        <span class="demo-arrow" aria-hidden="true">→</span>
+        <div id="demoStep2" class="demo-step">
+          <span class="demo-num">2</span>
+          <span><strong>Zoom In</strong> · <span id="demoRightName">Second person</span></span>
+        </div>
+        <button id="replayDemoBtn" type="button" class="btn ghost xs">↻ Replay</button>
+      </div>
+
       <!-- Direct-Manipulation Tool Bar -->
-      <div class="tool-strip" role="toolbar" aria-label="Motion stage tools">
+      <div class="tool-strip editor-only" role="toolbar" aria-label="Motion stage tools">
         <div class="tool-group" role="group" aria-label="Interaction mode">
           <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Move Camera &amp; Actors</button>
           <button id="toolDraw" type="button" class="tool-btn" data-tool="draw" aria-pressed="false">Draw Curve</button>
@@ -143,7 +158,7 @@
       </div>
 
       <!-- VIDEO-EDITOR MULTI-TRACK KEYFRAME TIMELINE -->
-      <div class="kf-editor">
+      <div class="kf-editor editor-only">
         <div class="kf-header">
           <span class="kf-title">Keyframe Tracks</span>
           <div class="kf-controls">
@@ -159,7 +174,7 @@
       </div>
 
       <!-- 3 Clean Live Sliders -->
-      <div id="orbitBar" class="orbit-bar">
+      <div id="orbitBar" class="orbit-bar editor-only">
         <div class="slider-chip">
           <label for="orbitSweep">Orbit Sweep <span id="orbitSweepVal" class="mono">360°</span></label>
           <input id="orbitSweep" type="range" min="45" max="720" step="15" value="360">
@@ -183,7 +198,7 @@
       <div id="msg" class="msg" role="status" aria-live="polite"></div>
 
       <!-- Optional Advanced / Text Drawer -->
-      <details class="advanced-drawer">
+      <details class="advanced-drawer editor-only">
         <summary>Precision segment &amp; optional text edit</summary>
         <div class="drawer-body">
           <div class="edit-section">
