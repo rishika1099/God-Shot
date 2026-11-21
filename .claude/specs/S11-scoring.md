@@ -1,7 +1,7 @@
 # S11: Scoring, metrics and charts
 
 - **Owner:** Siva (`score.py`), Rishika (charts in `report.ipynb`)
-- **Status:** in progress (score.py + run_all.py done with tests; numbers need S02/S06 runs + own-clip labels)
+- **Status:** in progress (charts notebook + score.py + run_all.py done; numbers need dev/test runs)
 - **Depends on:** S03, S10, S06 (start against mocks + the first baseline runs)
 - **Models:** none for scoring; `MODEL_VERIFY` only for the verifier-vs-human metric
 
@@ -26,6 +26,7 @@ Turn runs + human labels into the slide numbers: baseline vs loop, verifier accu
 - [ ] Every number on the slides traces to `results.md`.
 
 ## Notes / changelog
+- 2026-11-21 (Rishika): Built `eval/report.ipynb` with all chart & report cells (clip-cluster 95% bootstrap CIs, two-sided exact paired sign test, grouped bars by label type / CameraBench vs own clips / difficulty, 5-bin reliability diagram + ECE + Brier, mirrored-control yes-bias, selective accuracy, rounds-to-converge + latency, and `eval/results.md` + `eval/failures.md` exporters). Ready to run on `dev` by 3:45 PM and `test` after the >= 4:00 PM freeze.
 - 2026-11-21 (Siva): `eval/score.py`, `eval/run_all.py`, `tests/test_score.py` (24 tests). Branch `siva/s11-score`
   (stacked on `siva/s03-geometry`).
   - `score_scene(scene, label)` → `[{label_id, type, pred, truth, correct, unresolved}]`, the fields

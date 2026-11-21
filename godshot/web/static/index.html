@@ -1,3 +1,92 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>God-Shot</title><link rel="stylesheet" href="style.css"></head>
-<body><!-- S09: reel player + inspector + map editor canvas --><script src="app.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>God-Shot</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">God-Shot <span class="tag">shot → verified blocking map</span></div>
+  <div class="controls">
+    <select id="runSelect" title="Cached runs"></select>
+    <label class="btn" id="uploadLabel">Upload clip<input type="file" id="upload" accept="video/*" hidden></label>
+    <span id="badges"></span>
+  </div>
+</header>
+
+<main>
+  <section class="left">
+    <div class="player">
+      <video id="video" controls muted playsinline></video>
+      <div id="noVideo" class="empty">No clip or reel for this run yet. The map below still plays.</div>
+    </div>
+    <div class="timeline">
+      <button id="play" class="btn small">▶</button>
+      <input type="range" id="time" min="0" max="10" step="0.01" value="0">
+      <span id="timeLabel" class="mono">00:00.000</span>
+      <span id="segLabel" class="seg"></span>
+    </div>
+    <div class="mapwrap">
+      <canvas id="map"></canvas>
+      <div class="legend">drag <b>green dots</b> = camera keys · <b>ring</b> = yaw of selected key ·
+        drag actors' dots / objects · dashed grey = original path</div>
+    </div>
+  </section>
+
+  <section class="right">
+    <div class="card">
+      <h3>Verify loop</h3>
+      <div id="rounds" class="tabs"></div>
+      <div id="roundStats" class="stats"></div>
+      <ul id="checks" class="checks"></ul>
+    </div>
+
+    <div class="card">
+      <h3>Low confidence</h3>
+      <ul id="lowconf" class="lowconf"></ul>
+    </div>
+
+    <div class="card">
+      <h3>Edit the shot</h3>
+      <div class="row">
+        <label>FOV <span id="fovVal" class="mono"></span>°</label>
+        <input type="range" id="fov" min="20" max="110" step="1">
+      </div>
+      <div class="row">
+        <select id="preset">
+          <option value="static">static</option>
+          <option value="dolly_in">dolly in</option>
+          <option value="dolly_out">dolly out</option>
+          <option value="truck_left">truck left</option>
+          <option value="truck_right">truck right</option>
+          <option value="pan_left">pan left</option>
+          <option value="pan_right">pan right</option>
+          <option value="arc_left">arc left (around actor)</option>
+          <option value="arc_right">arc right (around actor)</option>
+        </select>
+        <input id="t0" type="number" step="0.5" min="0" value="0" title="from (s)">
+        <input id="t1" type="number" step="0.5" min="0" value="4" title="to (s)">
+        <input id="amount" type="number" step="0.5" placeholder="amount" title="units or degrees (blank = default)">
+        <select id="target" title="arc target"></select>
+        <button id="applyPreset" class="btn small">Apply</button>
+      </div>
+      <div class="row">
+        <input id="instruction" type="text" placeholder='e.g. "make it a slow arc to the right around the actor"'>
+        <button id="textEdit" class="btn small">Text edit</button>
+      </div>
+      <div class="row buttons">
+        <button id="rerender" class="btn primary">Re-render</button>
+        <button id="reset" class="btn">Reset edits</button>
+        <button id="reshoot" class="btn">Re-shoot (Omni)</button>
+      </div>
+      <div id="msg" class="msg"></div>
+    </div>
+  </section>
+</main>
+
+<img id="thumb" class="thumb" alt="">
+<script src="app.js"></script>
+</body>
+</html>
