@@ -49,18 +49,40 @@
           <h2>Video Monitor</h2>
           <span id="segLabel" class="seg"></span>
         </div>
-        <span class="muted-meta">Synced to camera board →</span>
+        <div class="head-actions">
+          <div class="seg-toggle" role="group" aria-label="Video compare mode">
+            <button id="viewCompareBtn" type="button" class="seg-btn active" aria-pressed="true">Before | After</button>
+            <button id="viewSingleBtn" type="button" class="seg-btn" aria-pressed="false">Single</button>
+          </div>
+        </div>
       </div>
 
-      <div class="player">
-        <video id="video" controls muted playsinline></video>
-        <div id="noVideo" class="empty">
-          <div class="empty-inner">
-            <svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none">
-              <rect x="3" y="5" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6"/>
-              <path d="M17 10l4-2.5v9L17 14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-            </svg>
-            <p>No video yet for this run. Hit Play to preview the camera path on the right.</p>
+      <div id="videoStage" class="video-stage compare">
+        <div class="player-slot">
+          <span id="beforeBadge" class="slot-badge before-badge">BEFORE · Original</span>
+          <div class="player">
+            <video id="video" controls muted playsinline></video>
+            <div id="noVideo" class="empty">
+              <div class="empty-inner">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="none">
+                  <rect x="3" y="5" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M17 10l4-2.5v9L17 14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+                <p>No clip yet. Hit Play to preview the camera path on the right.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="afterSlot" class="player-slot after-slot">
+          <span id="afterBadge" class="slot-badge after-badge">AFTER · Re-shoot</span>
+          <div class="player">
+            <video id="videoAfter" controls muted playsinline></video>
+            <div id="noVideoAfter" class="empty">
+              <div class="empty-inner">
+                <p>No re-shoot or edited render yet. Adjust the camera on the right and click <strong>Re-render</strong> or <strong>Re-shoot (Omni)</strong>.</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

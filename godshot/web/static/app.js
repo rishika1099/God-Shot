@@ -304,7 +304,11 @@ async function openRun(id) {
     $("orbitRadius").value = initR.toFixed(1);
     $("orbitRadiusVal").textContent = initR.toFixed(1) + "u";
   }
-  setVideo(S.run.reel_edit_url || S.run.reel_url || S.run.clip_url);
+  const beforeUrl = S.run.clip_url || S.run.reel_url;
+  const afterUrl = S.run.reshoot_url || S.run.reel_edit_url;
+  setBeforeVideo(beforeUrl, S.run.clip_url ? "BEFORE · Original Clip" : "BEFORE · Verified Reel");
+  setAfterVideo(afterUrl, S.run.reshoot_url ? "AFTER · Re-shoot (Omni)" : "AFTER · Edited Reel");
+  setCompareMode(Boolean(afterUrl));
   const rounds = Object.keys(S.run.checks).map(Number).sort((a, b) => a - b);
   S.round = rounds.length ? rounds[rounds.length - 1] : null;
   renderInspector();
@@ -313,14 +317,51 @@ async function openRun(id) {
   if ($("modeBanner")) $("modeBanner").textContent = "";
   syncHistoryButtons();
   msg(S.run.scene_edit
-    ? "Loaded your latest saved edit. Pick a POV preset or drag the green camera / lens ring."
-    : "Scene locked — pick a camera angle/POV preset, adjust FOV, or drag the green camera on the board.");
+    ? "Loaded your latest saved edit. Drag the camera or actors, or hit Play to compare Before | After."
+    : "Hit Play to compare Before | After in sync, or drag the green camera / actors on the board.");
+}
+
+function setCompareMode(on) {
+  const stage = $("videoStage");
+  if (stage) stage.classList.toggle("compare", on);
+  if ($("viewCompareBtn")) {
+    $("viewCompareBtn").classList.toggle("active", on);
+    $("viewCompareBtn").setAttribute("aria-pressed", String(on));
+  }
+  if ($("viewSingleBtn")) {
+    $("viewSingleBtn").classList.toggle("active", !on);
+    $("viewSingleBtn").setAttribute("aria-pressed", String(!on));
+  }
+}
+if ($("viewCompareBtn")) $("viewCompareBtn").onclick = () => setCompareMode(true);
+if ($("viewSingleBtn")) $("viewSingleBtn").onclick = () => setCompareMode(false);
+
+function setBeforeVideo(url, label = "BEFORE · Original") {
+  const v = $("video");
+  if ($("beforeBadge")) $("beforeBadge").textContent = label;
+  if (url) { v.src = url; v.style.display = "block"; $("noVideo").style.display = "none"; }
+  else { v.removeAttribute("src"); v.load(); v.style.display = "none"; $("noVideo").style.display = "flex"; }
+}
+
+function setAfterVideo(url, label = "AFTER · Re-shoot") {
+  const va = $("videoAfter");
+  if (!va) return;
+  if ($("afterBadge")) $("afterBadge").textContent = label;
+  if (url) { va.src = url; va.style.display = "block"; $("noVideoAfter").style.display = "none"; }
+  else { va.removeAttribute("src"); va.load(); va.style.display = "none"; $("noVideoAfter").style.display = "flex"; }
 }
 
 function setVideo(url) {
-  const v = $("video");
-  if (url) { v.src = url; v.style.display = "block"; $("noVideo").style.display = "none"; }
-  else { v.removeAttribute("src"); v.load(); v.style.display = "none"; $("noVideo").style.display = "flex"; }
+  if (!url) { setBeforeVideo(null); return; }
+  const isAfter = /reshoot|edit|compare|map_/.test(url);
+  if (isAfter && (S.run?.clip_url || S.run?.reel_url)) {
+    const lbl = /reshoot|compare/.test(url) ? "AFTER · Re-shoot (Omni)" : "AFTER · Edited Render";
+    setAfterVideo(url, lbl);
+    setCompareMode(true);
+    seek(0);
+    return;
+  }
+  setBeforeVideo(url, "BEFORE · Original");
 }
 
 // ------------------------------------------------------------------ Video-Editor Multi-Track Keyframe Timeline
@@ -597,30 +638,67 @@ function moveThumb(ev) {
 }
 function hideThumb() { $("thumb").style.display = "none"; }
 
-// ------------------------------------------------------------------ time
+// ------------------------------------------------------------------ time (synced Before + After + Map!)
+function syncAfterTime(t) {
+  const va = $("videoAfter");
+  if (!va || !va.src || isNaN(va.duration) || va.duration <= 0) return;
+  const clamped = Math.max(0, Math.min(t, Math.max(0, va.duration - 0.04)));
+  if (Math.abs(va.currentTime - clamped) > 0.12) va.currentTime = clamped;
+}
+
 function seek(t) {
   S.t = Math.max(0, Math.min(t, S.orig?.clip.duration_s || 0));
   const v = $("video");
   if (v.src && Math.abs(v.currentTime - S.t) > 0.05) v.currentTime = S.t;
+  syncAfterTime(S.t);
   updateTimelinePlayheads();
 }
 function startMapPreview() {
-  const v = $("video");
+  const v = $("video"), va = $("videoAfter");
   if (v.src && !v.paused) v.pause();
+  if (va && va.src && !va.paused) va.pause();
   S.playing = true;
   S.lastTick = performance.now();
   $("play").textContent = "❚❚";
 }
 $("time").oninput = (e) => seek(parseFloat(e.target.value));
 $("play").onclick = () => {
-  const v = $("video");
-  const edited = S.orig && S.scene && JSON.stringify(S.orig.camera.track) !== JSON.stringify(S.scene.camera.track);
-  if (v.src && !edited) { v.paused ? v.play() : v.pause(); return; }
+  const v = $("video"), va = $("videoAfter");
+  if (v.src) {
+    if (v.paused) {
+      if (v.duration && v.currentTime >= v.duration - 0.08) v.currentTime = 0;
+      syncAfterTime(v.currentTime);
+      v.play().catch(() => {});
+      if (va && va.src && $("videoStage")?.classList.contains("compare")) va.play().catch(() => {});
+    } else {
+      v.pause();
+      if (va && va.src) va.pause();
+    }
+    return;
+  }
   S.playing = !S.playing; S.lastTick = performance.now();
   $("play").textContent = S.playing ? "❚❚" : "▶";
 };
-$("video").onplay = () => { S.playing = false; $("play").textContent = "❚❚"; };
-$("video").onpause = () => { if (!S.playing) $("play").textContent = "▶"; };
+$("video").onplay = () => {
+  S.playing = false;
+  $("play").textContent = "❚❚";
+  const va = $("videoAfter");
+  if (va && va.src && $("videoStage")?.classList.contains("compare")) {
+    syncAfterTime($("video").currentTime);
+    if (va.paused) va.play().catch(() => {});
+  }
+};
+$("video").onpause = () => {
+  const va = $("videoAfter");
+  if (va && va.src && !va.paused) va.pause();
+  if (!S.playing) $("play").textContent = "▶";
+};
+$("video").onended = () => {
+  if (S.loop) {
+    seek(0);
+    $("video").play().catch(() => {});
+  }
+};
 
 if ($("loopToggle")) {
   $("loopToggle").onclick = () => {
@@ -655,6 +733,7 @@ function tick(now) {
     const dur = S.orig.clip.duration_s;
     if (v.src && !v.paused && !isNaN(v.duration)) {
       S.t = Math.min(v.currentTime, dur);
+      syncAfterTime(S.t);
     } else if (S.playing) {
       S.t += (now - S.lastTick) / 1000;
       if (S.t > dur) {
@@ -662,6 +741,7 @@ function tick(now) {
         else { S.t = dur; S.playing = false; $("play").textContent = "▶"; }
       }
       if (v.src && Math.abs(v.currentTime - S.t) > 0.25) v.currentTime = S.t;
+      syncAfterTime(S.t);
     }
     S.lastTick = now;
     $("time").value = S.t; $("timeLabel").textContent = mmss(S.t);
