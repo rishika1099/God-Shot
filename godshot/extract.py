@@ -12,8 +12,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +26,18 @@ from pydantic import ValidationError
 from godshot import ingest
 from godshot.cache import cached
 from godshot.config import load_config
-from godshot.schema import MAX_ACTORS, MAX_OBJECTS, Clip, SceneV1, mmss
+from godshot.geometry import camera_motion
+from godshot.schema import (
+    MAX_ACTORS,
+    MAX_OBJECTS,
+    Clip,
+    LowConf,
+    MotionSegment,
+    Rotation,
+    SceneV1,
+    Translation,
+    mmss,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +49,15 @@ YAW_JUMP_WINDOW_S = 1.1
 ENDPOINT_TOL_S = 0.01
 CLAMP_MARGIN = 1.0
 SAME_SPOT = 0.25  # duplicates closer than this (room units) are the same thing → drop
+# Motion segments derived from the track (tune on DEV only).
+MOTION_WINDOW_S = 1.0
+ROT_MIN_DEG_PER_S = 8.0  # slower turning = rotation "none"
+TRANS_MIN_UNITS_PER_S = 0.15  # slower movement = translation "static" ...
+TRANS_MIN_REL_PER_S = 0.05  # ... or 5% of the mean distance to the scene per second, whichever is larger
+# Cut detection: ffmpeg `scene` score. 0.15–0.2 separated real cuts from a fast orbit; 0.3 missed them.
+CUT_THRESHOLD = 0.2
+CUT_EDGE_S = 0.1
+CUT_PAD_S = 0.5
 
 
 class ExtractError(RuntimeError):
@@ -343,16 +367,115 @@ def add_mmss(scene: SceneV1) -> SceneV1:
     return s
 
 
+def _windows(duration: float, step: float = MOTION_WINDOW_S) -> list[tuple[float, float]]:
+    """[0, duration] in `step` windows; a tail shorter than step/4 is merged into the last window."""
+    edges = [0.0]
+    while edges[-1] + step < duration - step / 4:
+        edges.append(round(edges[-1] + step, 6))
+    edges.append(duration)
+    return list(pairwise(edges))
+
+
+def classify_motion(m: dict[str, float], dt: float) -> tuple[Translation, Rotation]:
+    """One window of `geometry.camera_motion` → (translation, rotation) enums, using per-second rates.
+
+    rotation: |dyaw| ≥ ROT_MIN_DEG_PER_S·dt → pan_left (+) / pan_right (−).
+    translation: movement ≥ max(TRANS_MIN_UNITS_PER_S, TRANS_MIN_REL_PER_S · scene distance)·dt, else static.
+    Mostly sideways AND turning back toward the side it left (keeps the subject framed) → arc_*;
+    otherwise the dominant axis → dolly_in/out or truck_left/right. `handheld_drift` is never derived.
+    """
+    fwd, lat, dyaw = m["forward"], m["lateral"], m["dyaw"]
+    rotation: Rotation = "none"
+    if abs(dyaw) >= ROT_MIN_DEG_PER_S * dt:
+        rotation = "pan_left" if dyaw > 0 else "pan_right"
+    thr = max(TRANS_MIN_UNITS_PER_S, TRANS_MIN_REL_PER_S * m.get("mean_scene_dist", 0.0)) * dt
+    if math.hypot(fwd, lat) < thr:
+        return "static", rotation
+    if abs(lat) >= abs(fwd):
+        # moving right while turning left (or left while turning right) = circling what's in front
+        if rotation != "none" and (lat > 0) == (dyaw > 0):
+            return ("arc_right" if lat > 0 else "arc_left"), rotation
+        return ("truck_right" if lat > 0 else "truck_left"), rotation
+    return ("dolly_in" if fwd > 0 else "dolly_out"), rotation
+
+
+def derive_motion_segments(scene: SceneV1) -> SceneV1:
+    """Rebuild camera.motion_segments from the numeric track so labels can't contradict the map.
+
+    Per 1 s window: `geometry.camera_motion` → `classify_motion`; equal neighbours are merged. When the
+    result differs from the model's own labels, those are kept in model_notes for debugging/eval.
+    """
+    s = scene.model_copy(deep=True)
+    segs: list[MotionSegment] = []
+    for t0, t1 in _windows(s.clip.duration_s):
+        tr, rot = classify_motion(camera_motion(s, t0, t1), t1 - t0)
+        if segs and (segs[-1].translation, segs[-1].rotation) == (tr, rot):
+            segs[-1].t1 = t1
+        else:
+            segs.append(MotionSegment(t0=t0, t1=t1, translation=tr, rotation=rot))
+
+    def fmt(ms: list[MotionSegment]) -> str:
+        return ", ".join(f"{m.t0:.1f}-{m.t1:.1f}s {m.translation}/{m.rotation}" for m in ms) or "none"
+
+    if fmt(segs) != fmt(s.camera.motion_segments):
+        note = f"motion_segments derived from the camera track (model said: {fmt(s.camera.motion_segments)})"
+        s.model_notes = _with_notes({"model_notes": s.model_notes}, [note])["model_notes"]
+    s.camera.motion_segments = segs
+    return s
+
+
 def postprocess(scene: SceneV1) -> SceneV1:
-    """Sort keys + endpoints, fix yaw jumps, clamp coords, add mmss. Pure: returns a new scene.
+    """Sort keys + endpoints, fix yaw jumps, clamp coords, derive motion segments, add mmss. Pure.
 
     Description de-duplication runs on the raw dict (`sanitize_raw`) because duplicates fail validation.
     """
     s = fix_tracks(scene)
     s = fix_yaw_jumps(s)
     s = clamp_coords(s)
+    s = derive_motion_segments(s)
     s = add_mmss(s)
     return SceneV1.model_validate(s.model_dump(by_alias=True))
+
+
+# --------------------------------------------------------------------------- cut detection
+
+
+def detect_cuts(clip: Path, threshold: float = CUT_THRESHOLD) -> list[float]:
+    """Hard-cut timestamps (s) via ffmpeg scene detection on a 320 px proxy. [] when ffmpeg is missing.
+
+    Cuts within CUT_EDGE_S of either end are ignored (encoder start/end artefacts).
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.warning("ffmpeg not found: skipping cut detection for %s", Path(clip).name)
+        return []
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostats", "-i", str(clip), "-an",
+         "-vf", f"scale=320:-2,select='gt(scene,{threshold})',showinfo", "-f", "null", "-"],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    if proc.returncode != 0:
+        log.warning("cut detection failed for %s: %s", Path(clip).name, proc.stderr.strip()[-200:])
+        return []
+    return [float(t) for t in re.findall(r"pts_time:([0-9.]+)", proc.stderr)]
+
+
+def mark_cuts(scene: SceneV1, cuts: list[float]) -> SceneV1:
+    """Flag each cut as a low-confidence camera range (±CUT_PAD_S) and note it. Pure; no-op without cuts."""
+    dur = scene.clip.duration_s
+    cuts = [t for t in cuts if CUT_EDGE_S < t < dur - CUT_EDGE_S]
+    if not cuts:
+        return scene
+    s = scene.model_copy(deep=True)
+    for t in cuts:
+        s.low_confidence.append(
+            LowConf(entity_id="camera", t0=max(0.0, t - CUT_PAD_S), t1=min(dur, t + CUT_PAD_S),
+                    failed_checks=["cut_detected"])
+        )
+    note = (f"{len(cuts)} hard cut(s) detected at {', '.join(mmss(t) for t in cuts)}: this is NOT one "
+            "continuous shot, so the map is unreliable across them")
+    s.model_notes = _with_notes({"model_notes": s.model_notes}, [note])["model_notes"]
+    return s
 
 
 def parse_scene(text: str, clip: Clip) -> SceneV1:
@@ -379,7 +502,11 @@ def extract_with_stats(clip: Path, fps: int | None = None) -> tuple[SceneV1, Cal
             scene = parse_scene(fixed, meta)
         except (ValueError, ValidationError) as e2:
             raise ExtractError(f"{meta.id}: invalid scene.v1 after repair: {e2}") from e2
-    return scene, stats
+    cuts = detect_cuts(clip)
+    if cuts:
+        log.warning("%s has %d hard cut(s) at %s: not one continuous shot", meta.id, len(cuts),
+                    ", ".join(f"{t:.2f}s" for t in cuts))
+    return mark_cuts(scene, cuts), stats
 
 
 def extract(clip: Path, fps: int | None = None) -> SceneV1:

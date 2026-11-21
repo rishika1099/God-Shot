@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +47,7 @@ def api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
 
     monkeypatch.setattr(extract, "_upload", fake_upload)
     monkeypatch.setattr(extract, "_generate", fake_generate)
+    monkeypatch.setattr(extract, "detect_cuts", lambda clip: state.get("cuts", []))
     return state
 
 
@@ -182,3 +186,105 @@ def test_no_room_means_no_clamp():
 def test_prompt_file_has_coordinate_rules():
     text = extract.load_prompt()
     assert "Origin = camera position at 00:00.000" in text and "yaw_deg" in text
+
+
+def test_cuts_flow_into_scene(api, payload, clip_file):
+    api["responses"], api["cuts"] = [payload], [4.0]
+    scene = extract.extract(clip_file)
+    assert [(lc.entity_id, lc.t0, lc.t1) for lc in scene.low_confidence] == [("camera", 3.5, 4.5)]
+    assert "1 hard cut(s) detected at 00:04.000" in scene.model_notes
+
+
+# --------------------------------------------------------------------------- motion segments from the track
+
+
+def _m(fwd=0.0, lat=0.0, dyaw=0.0, dist=3.0) -> dict[str, float]:
+    return {"forward": fwd, "lateral": lat, "dyaw": dyaw, "mean_scene_dist": dist}
+
+
+@pytest.mark.parametrize(
+    ("motion", "expected"),
+    [
+        (_m(), ("static", "none")),
+        (_m(fwd=0.5), ("dolly_in", "none")),
+        (_m(fwd=-0.5), ("dolly_out", "none")),
+        (_m(lat=0.5), ("truck_right", "none")),
+        (_m(lat=-0.5), ("truck_left", "none")),
+        (_m(dyaw=20), ("static", "pan_left")),
+        (_m(dyaw=-20), ("static", "pan_right")),
+        (_m(lat=0.5, dyaw=20), ("arc_right", "pan_left")),  # moving right, turning left: circling
+        (_m(lat=-0.5, dyaw=-20), ("arc_left", "pan_right")),
+        (_m(lat=0.5, dyaw=-20), ("truck_right", "pan_right")),  # turning away from the subject: not an arc
+        (_m(fwd=0.05, dyaw=3), ("static", "none")),  # below both thresholds
+        (_m(fwd=0.2, dist=10.0), ("static", "none")),  # 0.2 < 5% of a 10-unit scene distance
+    ],
+)
+def test_classify_motion(motion, expected):
+    assert extract.classify_motion(motion, 1.0) == expected
+
+
+def test_derived_segments_match_mock(scene_mock):
+    s = extract.derive_motion_segments(scene_mock)
+    got = [(m.t0, m.t1, m.translation, m.rotation) for m in s.camera.motion_segments]
+    assert got == [(0, 4, "dolly_in", "none"), (4, 8, "static", "pan_left"), (8, 10, "static", "none")]
+    assert "derived from the camera track" not in s.model_notes  # mock labels already agree
+
+
+def test_contradicting_labels_replaced_and_noted(scene_mock):
+    wrong = scene_mock.model_copy(deep=True)
+    for m in wrong.camera.motion_segments:
+        m.translation, m.rotation = "dolly_out", "pan_right"
+    s = extract.derive_motion_segments(wrong)
+    assert s.camera.motion_segments[0].translation == "dolly_in"
+    assert "model said: 0.0-4.0s dolly_out/pan_right" in s.model_notes
+
+
+def test_orbit_track_is_an_arc():
+    # camera circles a subject at (0, 2), radius 2, moving to its right and always facing the centre
+    keys = []
+    for i in range(9):
+        a = math.radians(-90 + 10 * i)  # start below the subject, go counterclockwise
+        x, y = 2 * math.cos(a), 2 + 2 * math.sin(a)
+        keys.append(CamKey(t=i * 0.5, x=x, y=y, yaw_deg=10 * i))  # yaw follows the angle: facing centre
+    s = SceneV1(clip=CLIP.model_copy(update={"duration_s": 4.0}), camera={"track": keys},
+                actors=[{"id": "a", "visual_description": "subject", "track": [{"t": 0, "x": 0, "y": 2}]}])
+    segs = extract.derive_motion_segments(s).camera.motion_segments
+    assert [(m.translation, m.rotation) for m in segs] == [("arc_right", "pan_left")]
+
+
+def test_windows_merge_short_tail():
+    assert extract._windows(3.1) == [(0, 1), (1, 2), (2, 3.1)]
+    assert extract._windows(3.5) == [(0, 1), (1, 2), (2, 3), (3, 3.5)]
+
+
+# --------------------------------------------------------------------------- cuts
+
+
+def test_mark_cuts_ignores_edges_and_is_pure(scene_mock):
+    s = extract.mark_cuts(scene_mock, [0.04, 5.0, 9.95])
+    assert [(lc.t0, lc.t1, lc.failed_checks) for lc in s.low_confidence] == [(4.5, 5.5, ["cut_detected"])]
+    assert scene_mock.low_confidence == []
+    assert extract.mark_cuts(scene_mock, []) is scene_mock
+
+
+needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="no ffmpeg")
+
+
+def _synth(out: Path, lavfi: str) -> Path:
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", lavfi, "-pix_fmt", "yuv420p",
+                    str(out)], check=True)
+    return out
+
+
+@needs_ffmpeg
+def test_detect_cuts_finds_hard_cut(tmp_path: Path):
+    red, blue = "color=c=red:s=320x240:d=1:r=24", "color=c=blue:s=320x240:d=1:r=24"
+    red_then_blue = f"{red}[a];{blue}[b];[a][b]concat=n=2:v=1"
+    clip = _synth(tmp_path / "cut.mp4", red_then_blue)
+    cuts = extract.detect_cuts(clip)
+    assert len(cuts) == 1 and cuts[0] == pytest.approx(1.0, abs=0.05)
+
+
+@needs_ffmpeg
+def test_detect_cuts_none_in_continuous_shot(tmp_path: Path):
+    assert extract.detect_cuts(_synth(tmp_path / "cont.mp4", "testsrc2=s=320x240:d=2:r=24")) == []
