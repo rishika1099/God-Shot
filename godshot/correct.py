@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "correct.md"
 _MERGE_GAP_S = 1.5
+MAX_FAILING_FRAMES = 6
+_RETRY_BACKOFFS_S = (4.0, 10.0)
 
 
 # --------------------------------------------------------------------------- identity freezing
@@ -238,16 +240,25 @@ def _format_observed(check: CheckV1) -> tuple[str, str]:
 def _collect_failing_frames(
     failed: Sequence[CheckV1],
     frames_dir: Path | None,
+    max_frames: int = MAX_FAILING_FRAMES,
 ) -> tuple[list[tuple[str, Path]], list[str]]:
-    """Return deduplicated `(label, path)` list for failing frames that exist on disk."""
+    """Return deduplicated `(label, path)` list for top-confidence failing frames (capped for latency)."""
+    # Prefer highest-confidence failures (and motion/side checks) so Argon stays under latency budget.
+    ranked = sorted(
+        failed,
+        key=lambda c: (c.result.confidence if c.result is not None else 0.5),
+        reverse=True,
+    )
     seen: set[str] = set()
     entries: list[tuple[str, Path]] = []
     labels: list[str] = []
-    for c in failed:
+    for c in ranked:
         ts = [c.t] if c.t_end is None else [c.t, c.t_end]
         for path_str, t_val in zip(c.input_ref.paths, ts, strict=False):
             if path_str in seen:
                 continue
+            if len(entries) >= max_frames:
+                return entries, labels
             seen.add(path_str)
             p = Path(path_str)
             if not p.exists() and frames_dir is not None:
@@ -259,6 +270,27 @@ def _collect_failing_frames(
             labels.append(label)
             entries.append((label, p))
     return entries, labels
+
+
+def _is_transient_error(err: Exception) -> bool:
+    code = getattr(err, "code", None) or getattr(err, "status_code", None)
+    if isinstance(code, int) and (code == 429 or 500 <= code < 600):
+        return True
+    msg = str(err).upper()
+    return any(tok in msg for tok in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE"))
+
+
+def _generate_with_retry(client: Any, *, model: str, contents: Any, config: Any) -> Any:
+    for attempt in range(len(_RETRY_BACKOFFS_S) + 1):
+        try:
+            return client.models.generate_content(model=model, contents=contents, config=config)
+        except Exception as err:
+            if attempt >= len(_RETRY_BACKOFFS_S) or not _is_transient_error(err):
+                raise
+            wait = _RETRY_BACKOFFS_S[attempt]
+            log.warning("Argon transient error (%s); retrying in %.0fs", err, wait)
+            time.sleep(wait)
+    raise RuntimeError("unreachable")
 
 
 def build_correction_prompt(
@@ -353,11 +385,7 @@ def correct(
             thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
         )
         t0 = time.perf_counter()
-        resp = client.models.generate_content(
-            model=cfg.MODEL_CORRECT,
-            contents=contents,
-            config=gen_cfg,
-        )
+        resp = _generate_with_retry(client, model=cfg.MODEL_CORRECT, contents=contents, config=gen_cfg)
         latency_s = round(time.perf_counter() - t0, 3)
         raw_text = resp.text or ""
         usage = getattr(resp, "usage_metadata", None)
@@ -373,10 +401,8 @@ def correct(
                 f"change nothing else.\n\nValidation error:\n{err}\n\nJSON:\n{raw_text}"
             )
             t1 = time.perf_counter()
-            repair_resp = client.models.generate_content(
-                model=cfg.MODEL_CORRECT,
-                contents=repair_prompt,
-                config=gen_cfg,
+            repair_resp = _generate_with_retry(
+                client, model=cfg.MODEL_CORRECT, contents=repair_prompt, config=gen_cfg
             )
             latency_s = round(latency_s + (time.perf_counter() - t1), 3)
             repair_usage = getattr(repair_resp, "usage_metadata", None)

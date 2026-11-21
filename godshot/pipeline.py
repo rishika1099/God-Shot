@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -208,7 +209,30 @@ def run_loop(
         failed_checks = [attached_now[k] for k in failing_keys]
         passed_checks = [attached_now[k] for k in usable_before if k in hits_before]
 
-        raw_res = correct_fn(current, failed_checks, passed_checks)
+        try:
+            raw_res = correct_fn(current, failed_checks, passed_checks)
+        except Exception as err:
+            log.warning(
+                "loop(%s) round %d: correction failed (%s); keeping last accepted scene",
+                scene0.clip.id,
+                r,
+                err,
+            )
+            loop_log.append(
+                {
+                    "round": r,
+                    "bank_size": len(bank),
+                    "usable": len(usable_before),
+                    "score_prev": round(len(hits_before) / max(len(usable_before), 1), 4),
+                    "score_cand": round(len(hits_before) / max(len(usable_before), 1), 4),
+                    "regressions": {"count": 0, "check_ids": [], "qkeys": []},
+                    "accepted": False,
+                    "changes": f"error: {type(err).__name__}: {err}",
+                    "tokens": 0,
+                    "latency_s": round(time.perf_counter() - t_round, 3),
+                }
+            )
+            break
         if isinstance(raw_res, tuple):
             cand_raw, meta = raw_res
         else:
@@ -300,8 +324,20 @@ def run(
 
     def _extract_needed_frames(pending: list[CheckV1]) -> None:
         ts = frames_needed(pending)
-        if ts:
-            ingest.frames_at(clip_path, ts, frames_dir)
+        if not ts:
+            return
+        safe_max = max(0.0, scene0.clip.duration_s - 0.15)
+        normal_ts = [t for t in ts if t <= safe_max]
+        eof_ts = [t for t in ts if t > safe_max]
+        if normal_ts:
+            ingest.frames_at(clip_path, normal_ts, frames_dir)
+        if eof_ts:
+            # Clamp EOF-edge timestamps (e.g. t == duration_s) so ffmpeg always writes a valid frame.
+            fallback = ingest.frame_at(clip_path, safe_max, frames_dir)
+            for t in eof_ts:
+                target = frames_dir / f"{max(0, round(t * 1000)):06d}.jpg"
+                if not target.exists():
+                    shutil.copy2(fallback, target)
 
     def _verify_real(pending: list[CheckV1], fdir: Path) -> dict[QKey, CheckResult]:
         return _verify_mod.verify(pending, fdir)

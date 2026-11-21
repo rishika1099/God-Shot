@@ -352,3 +352,36 @@ def test_prompt_builder_and_mark_low_confidence() -> None:
     tagged = mark_low_confidence(scene, failed)
     assert len(tagged.low_confidence) == len(failed)
     assert {lc.entity_id for lc in tagged.low_confidence} == {"door_1", "a1"}
+
+
+def test_transient_error_on_round2_preserves_round1(tmp_path: Path) -> None:
+    """If round 2 raises a transient error (e.g. 503), round 1 is preserved and artifacts are saved."""
+    truth = _make_simple_scene(door_x=2.0, table_x=2.0, lamp_x=2.0)
+    scene0 = _make_simple_scene(door_x=-2.0, table_x=-2.0, lamp_x=-2.0)
+    verify_fn, _ = _oracle_verifier(truth)
+    calls = {"n": 0}
+
+    def _fix_then_503(prev: SceneV1, _f: list[CheckV1], _p: list[CheckV1]) -> SceneV1:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            cand = copy.deepcopy(prev)
+            cand.objects[0].center[0] = 2.0
+            cand.model_notes = "fixed door_1"
+            return cand
+        raise RuntimeError("503 UNAVAILABLE")
+
+    final, log = run_loop(
+        scene0,
+        tmp_path / "frames",
+        tmp_path / "out",
+        verify_fn=verify_fn,
+        correct_fn=_fix_then_503,
+        max_rounds=3,
+    )
+
+    assert log[1]["accepted"] is True
+    assert log[2]["accepted"] is False
+    assert "503" in log[2]["changes"]
+    assert final.entity("door_1").center[0] == 2.0  # type: ignore[union-attr]
+    assert (tmp_path / "out" / "scene_final.json").exists()
+    assert (tmp_path / "out" / "loop_log.json").exists()

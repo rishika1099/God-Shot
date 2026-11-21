@@ -71,4 +71,5 @@ mark_low_confidence(final, still_failing)                 # merge by entity + ti
 - Stacked on `rishika/s04-checks` (uses `godshot.checks.make_checks`, `predict`, `frames_needed`).
 - Uses `godshot.verify.{observed, compare, attach}` once S05 merges, with spec-matching fallbacks while S05 is unmerged (zero edits to Siva's `verify.py`).
 - `godshot/__main__.py` was not modified to avoid merge conflicts with S00/S02/S11; wire `pipeline.run(Path(clip), Path(o))` into `__main__.py` at M1 sync.
-- Remaining: run on 1 real dev clip once S01/S02/S05 + team `.env` are available, and log runtime (< 3 min).
+- 2026-11-21: Hardened `correct.py` (capped attached failing frames to top 6 highest-confidence frames via `MAX_FAILING_FRAMES=6` for latency; added transient 429/503 exponential-backoff retry) and `pipeline.py` (clamped EOF-edge frame timestamps safely so `ffmpeg` never hits EOF; graceful break & artifact save if a later round hits transient API errors). 141/141 pytest pass, ruff-clean against merged S00–S05.
+- Remaining: log final `tos_001.mp4` live dev-clip runtime (currently running).
