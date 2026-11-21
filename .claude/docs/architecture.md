@@ -48,7 +48,7 @@ clip ─► S01 ingest ─► S02 extract (Argon) ─► scene.json ─► S04 c
 - **Cache everything.** The demo must run with Wi-Fi off.
 
 ## Milestones
-- **M0 (12:30):** S00 done; mock `scene.json` committed; everyone builds against mocks.
-- **M1 (3:30):** one real clip runs S01→S08 end to end.
-- **M2 (5:00):** eval numbers on the test split locked. Go/no-go on S12 polish.
-- **Freeze (6:30):** no new features. Pre-render demo reels.
+- **M0:** S00 done; mock `scene.json` committed; everyone builds against mocks.
+- **M1:** one real clip runs S01→S08 end to end.
+- **M2:** eval numbers on the test split locked. Go/no-go on S12 polish.
+- **Freeze:** no new features. Pre-render demo reels.

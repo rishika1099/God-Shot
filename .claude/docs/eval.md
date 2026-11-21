@@ -15,7 +15,7 @@ Check the CameraBench license before showing any of its clips; use them for numb
 
 ## Splits
 - `dev`: 5 clips (mixed sources) for prompts, thresholds and abstain margins.
-- `test`: everything else. **Freeze prompts and thresholds at ~4:00 PM before running test.** Say so on the slide.
+- `test`: everything else. **Freeze prompts and thresholds before running test.** Say so on the slide.
 
 ## Metrics (S11)
 1. **Scene accuracy vs humans, per label type:** run each human label through `geometry.py` on `scene_r0` and on `scene_final`. Grouped bars with 95% bootstrap CIs (resample by clip) + a per-clip paired sign test.
@@ -31,4 +31,4 @@ Check the CameraBench license before showing any of its clips; use them for numb
 ## Labeling protocol
 - 6–10 labels per clip; times rounded to 0.5 s.
 - Double-label 25% of clips → report inter-annotator agreement.
-- Everyone labels for 20 minutes at ~1:30 PM while the baseline runs.
+- Everyone helps label while the baseline runs.

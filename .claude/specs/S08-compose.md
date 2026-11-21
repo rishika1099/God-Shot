@@ -3,7 +3,6 @@
 - **Owner:** Akash
 - **Status:** todo
 - **Depends on:** S07, S01
-- **Target:** 2:30
 - **Models:** none
 
 ## Goal
