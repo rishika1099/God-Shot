@@ -20,13 +20,6 @@ needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg
 W, H = 320, 180
 
 
-@pytest.fixture(autouse=True)
-def _no_network_beats(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep every test offline: reshoot() would otherwise upload the clip to watch its performance."""
-    if "real_beats" not in request.keywords:
-        monkeypatch.setattr(reshoot, "performance_beats", lambda *a, **k: [])
-
-
 def _scene(yaw_end: float = 0.0, box_at: tuple[float, float] = (-2.0, 6.0), duration: float = 2.0) -> SceneV1:
     keys = [
         {"t": t, "mmss": mmss(t), "x": 0.0, "y": 0.0, "yaw_deg": yaw_end * t / duration}
