@@ -102,6 +102,19 @@ def test_probe_length_limits(tmp_path: Path, caplog: pytest.LogCaptureFixture) -
     assert any("16.0 s" in r.message for r in caplog.records)
 
 
+@needs_ffmpeg
+def test_probe_uses_video_duration_when_audio_is_longer(tmp_path: Path) -> None:
+    clip = tmp_path / "av.mp4"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "color=c=gray:s=64x64:r=24:d=2",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=2.6",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip),
+    )  # fmt: skip
+    assert ingest.probe(clip).duration_s == pytest.approx(2.0, abs=0.05)
+    last = ingest.frame_at(clip, ingest.probe(clip).duration_s - 1.2 / FPS, tmp_path / "f")
+    assert last.exists()
+
+
 def test_probe_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ingest.IngestError):
         ingest.probe(tmp_path / "nope.mp4")
