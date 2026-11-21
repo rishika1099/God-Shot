@@ -116,6 +116,25 @@ def _load_json(p: Path) -> Any:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
+def _loop_log(d: Path) -> list[dict[str, Any]]:
+    """loop_log.json with contract fields filled in.
+
+    contracts.md says each round has `pass_rate`, `n_checks`, `n_fail`. S06 currently writes the shared-bank
+    fields instead (`score_cand`, `bank_size`, `usable`), so map those when the contract fields are missing.
+    """
+    out = []
+    for e in _load_json(d / "loop_log.json") or []:
+        if not isinstance(e, dict):
+            continue
+        e = dict(e)
+        if e.get("pass_rate") is None and e.get("score_cand") is not None:
+            e["pass_rate"] = e["score_cand"]
+        if e.get("n_checks") is None and e.get("bank_size") is not None:
+            e["n_checks"] = e["bank_size"]
+        out.append(e)
+    return out
+
+
 def _latest_edit(d: Path) -> Path | None:
     edits = sorted(d.glob("scene_edit_*.json"), key=lambda p: int(p.stem.rsplit("_", 1)[1]))
     return edits[-1] if edits else None
@@ -135,7 +154,7 @@ def _run_payload(d: Path) -> dict[str, Any]:
         "scene_edit": _load_json(edit) if edit else None,
         "scenes": {n: _load_json(p) for n, p in _round_files(d, "scene")},
         "checks": {n: _load_json(p) for n, p in _round_files(d, "checks")},
-        "loop_log": _load_json(d / "loop_log.json") or [],
+        "loop_log": _loop_log(d),
         "reel_url": _url(d / "reel.mp4"),
         "reel_edit_url": _url(edit.with_name(edit.stem.replace("scene_", "reel_") + ".mp4"))
         if edit
@@ -215,7 +234,7 @@ def status() -> dict[str, Any]:
 def list_runs() -> list[dict[str, Any]]:
     out = []
     for d in _run_dirs():
-        log_data = _load_json(d / "loop_log.json") or []
+        log_data = _loop_log(d)
         rates = [r.get("pass_rate") for r in log_data if isinstance(r, dict)]
         out.append(
             {
@@ -397,7 +416,7 @@ def get_job(job_id: str) -> dict[str, Any]:
         d = Path(job["out"])
         if job["status"] == "running":
             out["stage"] = _stage_from_files(d)
-        out["loop_log"] = _load_json(d / "loop_log.json") or []
+        out["loop_log"] = _loop_log(d)
     return out
 
 
