@@ -7,7 +7,7 @@ Update your row when you start (`in progress`) and finish (`done`). Times are to
 | S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | 12:30 | in progress (code + tests done; smoke needs team `.env`) |
 | S01 | Ingest: upload + frames | Prajesh | S00 | 1:00 | todo |
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | 1:45 | todo |
-| S03 | Geometry: projection math | Siva | S00 | 1:15 | todo |
+| S03 | Geometry: projection math | Siva | S00 | 1:15 | done (PR open) |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | 2:00 | todo |
 | S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | todo |
 | S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | todo |
