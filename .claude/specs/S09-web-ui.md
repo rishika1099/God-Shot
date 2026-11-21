@@ -71,5 +71,9 @@ A local web page to run the pipeline, watch the verify loop, view the reel, edit
     realistic. `compose_reel(clip, map_mp4, out)` on `akash/s08-compose` matches the call here. Without ffmpeg,
     re-render saves the edit and answers `render: "error"` with S07's "ffmpeg not found" note; with no clip it
     answers `map_only` and the page plays the map video. Tests use fake render/compose (no ffmpeg needed).
+  - 2026-11-21 dress rehearsal with merged S06: the UI reads a real `run_loop` output folder (checks per round,
+    verdicts, loop_log). S06 writes `score_cand` / `bank_size` instead of the contract's `pass_rate` / `n_checks`
+    (contracts.md "Run artifacts"), so `_loop_log()` maps them when the contract fields are missing. Remove once
+    S06 writes the contract fields.
   - Still open: acceptance 1 (cached demo of 2 real runs with Wi-Fi off) needs 2 real S06 runs; acceptance 2
     (new reel < 30 s) needs S07/S08. Not yet checked in a real browser by a human.
