@@ -8,7 +8,7 @@ const S = {
   runId: null, run: null, orig: null, scene: null, waypoints: [],
   t: 0, playing: false, lastTick: 0, round: null,
   sel: { cam: null, actor: null }, drag: null, hover: null, view: null, offline: false, jobTimer: null,
-  tool: "select", loop: true, curveMode: true, actorDragMode: "key", sceneLocked: true,
+  tool: "select", loop: true, curveMode: true, actorDragMode: "key", sceneLocked: false,
   orbitDir: 1, orbitSweep: 360, orbitRadius: null, lastOrbitAnchor: null,
   drawStroke: null, orbitDraft: null, undo: [], redo: [],
   kfDrag: null,
@@ -772,10 +772,10 @@ if ($("sceneLockBtn")) {
     S.sceneLocked = !S.sceneLocked;
     $("sceneLockBtn").classList.toggle("active-pill", S.sceneLocked);
     $("sceneLockBtn").setAttribute("aria-pressed", String(S.sceneLocked));
-    $("sceneLockBtn").textContent = S.sceneLocked ? "🔒 Scene Locked" : "🔓 Scene Unlocked";
+    $("sceneLockBtn").textContent = S.sceneLocked ? "🔒 Actors Locked" : "🔓 Actors Editable";
     msg(S.sceneLocked
-      ? "Scene locked — actors & props stay fixed; edits only change camera angle, POV & FOV."
-      : "Scene unlocked — you can now drag actors & props too.");
+      ? "Actors & props locked — drags only move the camera."
+      : "Actors & props unlocked — drag any person to move them, or drag the dot in front of them to turn their facing.");
   };
 }
 
@@ -1047,6 +1047,7 @@ window.addEventListener("resize", resize);
 
 const lowConfAt = (id, t) => (S.scene.low_confidence || []).some((l) => l.entity_id === id && t >= l.t0 && t <= l.t1);
 const liveAimHandle = (cam) => { const f = fwdVec(cam.yaw); return S.view.toPx(cam.x + f[0] * 1.45, cam.y + f[1] * 1.45); };
+const actorFacingHandle = (p) => { const f = fwdVec(p.facing); return S.view.toPx(p.x + f[0] * 0.85, p.y + f[1] * 0.85); };
 
 function draw() {
   const sc = S.scene; if (!sc) return;
@@ -1253,7 +1254,16 @@ function drawActor(a, P, s, dpr) {
   ctx.fillStyle = "#f5d0b0"; ctx.beginPath(); ctx.arc(0, 0, Math.max(5 * dpr, 0.13 * s), 0, 2 * Math.PI); ctx.fill();
   ctx.restore(); ctx.globalAlpha = 1;
   ctx.strokeStyle = col; ctx.lineWidth = 2 * dpr;
-  line([px, py], P(now.x + f[0] * 0.6, now.y + f[1] * 0.6));
+  const fh = actorFacingHandle(now);
+  line([px, py], fh);
+  // Interactive Facing / Turn Handle at the tip of the actor's heading arrow!
+  if (!S.sceneLocked) {
+    const fHov = (S.hover?.kind === "actor_face" && S.hover.id === a.id) || (S.drag?.kind === "actor_face" && S.drag.id === a.id);
+    ctx.fillStyle = fHov ? "#ffffff" : "#0b0e14";
+    ctx.strokeStyle = fHov ? "#ffffff" : col;
+    ctx.lineWidth = (fHov ? 2.4 : 1.8) * dpr;
+    ctx.beginPath(); ctx.arc(fh[0], fh[1], (fHov ? 6.8 : 5.2) * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+  }
   pillLabel(`${a.id}${low ? " ?" : ""}`, px, py - Math.max(16 * dpr, 0.44 * s) - 9 * dpr, dpr, low ? "#f5bf4f" : "#f8fafc");
 }
 
@@ -1295,7 +1305,15 @@ function hit(px, py) {
   // When Scene Locked is ON, actors & props stay fixed so scene action never changes
   if (S.sceneLocked) return null;
 
-  // 4. Live Actor Bodies (grab any actor directly!)
+  // 4. Actor Facing / Turn Handles (grab the circle in front of any actor to spin them!)
+  for (const a of sc.actors) {
+    const p = actorAt(a, S.t);
+    if (p.visible && near(...actorFacingHandle(p), 12 * dpr)) {
+      return { kind: "actor_face", id: a.id };
+    }
+  }
+
+  // 5. Live Actor Bodies (grab any actor directly!)
   for (const a of sc.actors) {
     const p = actorAt(a, S.t);
     if (p.visible && near(...P(p.x, p.y), Math.max(18 * dpr, 0.42 * S.view.s))) {
@@ -1322,6 +1340,7 @@ function hoverHelpText(h) {
   if (h.kind === "cam_live") return `Drag camera to move @ ${S.t.toFixed(1)}s (auto-keyframe + smooth curve)`;
   if (h.kind === "cam_aim") return `Drag lens handle to rotate camera aim @ ${S.t.toFixed(1)}s`;
   if (h.kind === "cam_wp") return `Drag diamond #${h.index + 1} (${S.waypoints[h.index]?.t.toFixed(1)}s) to bend camera curve`;
+  if (h.kind === "actor_face") return `Drag facing circle to turn ${h.id} @ ${S.t.toFixed(1)}s`;
   if (h.kind === "actor_live") {
     return S.actorDragMode === "all"
       ? `Drag ${h.id} to reposition across the whole shot`
@@ -1395,6 +1414,24 @@ canvas.addEventListener("pointerdown", (ev) => {
     S.sel.cam = h.index;
     seek(S.waypoints[h.index].t);
     S.drag = h;
+  } else if (h.kind === "actor_face") {
+    const a = S.scene.actors.find((x) => x.id === h.id);
+    if (S.actorDragMode === "all") {
+      S.drag = { kind: "actor_face_all", id: a.id };
+    } else {
+      a.track = sortedKeys(a.track);
+      let idx = a.track.findIndex((k) => Math.abs(k.t - S.t) < 0.3);
+      if (idx < 0) {
+        const p = actorAt(a, S.t);
+        const nk = { t: roundN(S.t, 3), mmss: mmss(S.t), x: roundN(p.x, 3), y: roundN(p.y, 3), facing_deg: roundN(p.facing, 2), visible: true, _pinned: true };
+        a.track.push(nk); a.track = sortedKeys(a.track);
+        idx = a.track.findIndex((k) => k.t === nk.t);
+      } else {
+        a.track[idx]._pinned = true;
+      }
+      S.sel.actor = { id: a.id, index: idx };
+      S.drag = { kind: "actor_face", id: a.id, index: idx };
+    }
   } else if (h.kind === "actor_live") {
     const a = S.scene.actors.find((x) => x.id === h.id);
     if (S.actorDragMode === "all") {
@@ -1405,9 +1442,11 @@ canvas.addEventListener("pointerdown", (ev) => {
       let idx = a.track.findIndex((k) => Math.abs(k.t - S.t) < 0.3);
       if (idx < 0) {
         const p = actorAt(a, S.t);
-        const nk = { t: roundN(S.t, 3), mmss: mmss(S.t), x: roundN(p.x, 3), y: roundN(p.y, 3), facing_deg: roundN(p.facing, 2), visible: true };
+        const nk = { t: roundN(S.t, 3), mmss: mmss(S.t), x: roundN(p.x, 3), y: roundN(p.y, 3), facing_deg: roundN(p.facing, 2), visible: true, _pinned: true };
         a.track.push(nk); a.track = sortedKeys(a.track);
         idx = a.track.findIndex((k) => k.t === nk.t);
+      } else {
+        a.track[idx]._pinned = true;
       }
       S.sel.actor = { id: a.id, index: idx };
       S.drag = { kind: "actor_key", id: a.id, index: idx };
@@ -1465,8 +1504,33 @@ canvas.addEventListener("pointermove", (ev) => {
   } else if (d.kind === "actor_key") {
     const a = sc.actors.find((x) => x.id === d.id);
     a.track = sortedKeys(a.track);
-    Object.assign(a.track[d.index], { x: r(wx), y: r(wy) });
+    const k = a.track[d.index];
+    k._pinned = true;
+    const dx = r(wx) - k.x, dy = r(wy) - k.y;
+    k.x = r(wx); k.y = r(wy);
+    // Carry unpinned future keys forward so the actor stays where you move them instead of snapping back!
+    for (let j = d.index + 1; j < a.track.length; j++) {
+      if (a.track[j]._pinned) break;
+      a.track[j].x = r(a.track[j].x + dx);
+      a.track[j].y = r(a.track[j].y + dy);
+    }
     if ($("autoAim")?.checked) bakeCameraCurve();
+  } else if (d.kind === "actor_face") {
+    const a = sc.actors.find((x) => x.id === d.id);
+    a.track = sortedKeys(a.track);
+    const k = a.track[d.index];
+    k._pinned = true;
+    const newFace = r(yawTowards(k.x, k.y, wx, wy));
+    k.facing_deg = newFace;
+    for (let j = d.index + 1; j < a.track.length; j++) {
+      if (a.track[j]._pinned) break;
+      a.track[j].facing_deg = newFace;
+    }
+  } else if (d.kind === "actor_face_all") {
+    const a = sc.actors.find((x) => x.id === d.id);
+    const p = actorAt(a, S.t);
+    const newFace = r(yawTowards(p.x, p.y, wx, wy));
+    for (const k of a.track) k.facing_deg = newFace;
   } else if (d.kind === "actor_all") {
     const a = sc.actors.find((x) => x.id === d.id);
     const dx = wx - d.startX, dy = wy - d.startY;
