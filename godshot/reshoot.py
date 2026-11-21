@@ -720,7 +720,14 @@ def describe_shot(
         lines.append("Camera viewpoint and actor facing (follow the blockout angle strictly):")
         lines += vp_notes + face_notes
     if beats:
-        lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
+        if has_back:
+            lines.append(
+                "Performance actions (perform these EXACT physical actions and timing, viewed from the NEW "
+                "camera angle in the blockout — e.g. from behind when the camera orbits behind them; "
+                "ignore any original-camera left/right/foreground wording in the beats):"
+            )
+        else:
+            lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
         lines += _beat_lines(beats, time_scale)
     rules = SHOT_RULES_DIRECTED if directed else SHOT_RULES
     if scene_edited.actors:
@@ -784,11 +791,17 @@ def edit_prompt(
     _, has_back = _viewpoint_notes(
         scene_edited, duration_s or scene_edited.clip.duration_s, time_scale, scene_orig=scene_orig
     )
-    use_beats = None if has_back else beats
     only = "Change ONLY the camera position, angle, point of view and field of view."
     if directed:
         keep, only = "What the people do is described in the PERFORMANCE section below.", ""
-    elif use_beats:
+    elif beats and has_back:
+        keep = (
+            "The people MUST still perform all the exact physical actions and timing in the performance "
+            "beats below (gestures, strikes, object interactions, movement), viewed from the NEW camera "
+            "angle in the blockout (including from behind their head and shoulders when the camera is "
+            "behind them)."
+        )
+    elif beats:
         keep = (
             "The people must perform exactly as in the original clip (performance beats below): the same "
             "actions, gestures, expressions, head turns and timing."
@@ -809,7 +822,7 @@ def edit_prompt(
         + describe_shot(
             scene_edited,
             duration_s,
-            beats=use_beats,
+            beats=beats,
             orig_hfov=orig_hfov,
             time_scale=time_scale,
             directed=directed,
