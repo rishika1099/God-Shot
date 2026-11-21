@@ -738,13 +738,13 @@ def reshoot(
     return out
 
 
-def _directed(prompt: str, direction: tuple[Any, Any] | None) -> str:
+def _directed(prompt: str, direction: Any | None) -> str:
+    """S14 (opt-in): geometric prompt + director's notes. `direction`: `direct.Pack` or (brief, dir)."""
     if direction is None:
         return prompt
     from godshot import direct  # S14 (lazy: direct imports shot_facts from here)
 
-    brief, dirn = direction
-    return direct.directed_prompt(prompt, brief, dirn)
+    return direct.compose(prompt, direction)
 
 
 def reshoot_best(
@@ -757,52 +757,105 @@ def reshoot_best(
     direct: bool = False,
     score_preservation: bool = False,
     w_preserve: float = 0.4,
+    request: str = "",
+    critic_rounds: int = 0,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Generate `n` takes in parallel, score each with `conformance` vs the edited map, keep the best.
 
-    S14 (opt-in): `direct=True` runs the scene analyst + director once (out_dir/direct/*.json) and every take
-    uses the directed prompt. With `direct` or `score_preservation`, each take also gets a preservation score
-    (must-preserve elements still visible) and takes are ranked by (1 - w)·conformance + w·preservation.
-    Writes out_dir/reshoot_best.mp4 (labelled) + reshoot_best.json; returns that summary.
+    S14 (opt-in; `request` or `critic_rounds` imply `direct`):
+    - `direct=True`: scene analyst → edit interpreter (map diff + free-text `request`) → director, once
+      (out_dir/direct/*.json); every take uses the directed prompt.
+    - each take also gets preservation (LOCKED must-preserve items still visible) and, with a request,
+      fulfilment (the requested changes happened); takes rank by (1 - w)·conformance + w·mean(scene scores).
+    - `critic_rounds` > 0: the critic watches the best take; on "revise" one corrected take is generated and
+      scored, up to that many rounds (out_dir/direct/critique_<r>.json).
+    - `score_preservation=True` without `direct`: plain S12 takes, scored for preservation (for A/B).
+    A take whose Omni call fails is retried once. Writes out_dir/reshoot_best.mp4 (labelled) + .json.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     out_dir = Path(out_dir)
-    brief = direction = None
+    direct = direct or bool(request.strip()) or critic_rounds > 0
+    pack = brief = spec = None
     if direct or score_preservation:
         from godshot import direct as direct_mod  # S14
 
         dur = min(scene_edited.clip.duration_s, _seconds(kwargs.get("duration", "8s")))
         if direct:
-            brief, dirn = direct_mod.prepare(clip, scene_orig, scene_edited, out_dir, duration_s=dur)
-            direction = (brief, dirn)
+            pack = direct_mod.prepare(clip, scene_orig, scene_edited, out_dir, duration_s=dur,
+                                      request=request)  # fmt: skip
+            brief, spec = pack.brief, pack.spec
         else:
             brief = direct_mod.analyze_scene(clip, scene_orig)
 
-    def one(k: int) -> dict[str, Any]:
-        path = reshoot(clip, scene_orig, scene_edited, out_dir / f"take_{k + 1}.mp4", take=k,
-                       direction=direction, **kwargs)  # fmt: skip
-        raw = (
-            work_dir_for(path) / "raw.mp4"
-        )  # score the UNLABELLED video (the badge could confuse the verifier)
+    def make(k: int, take_pack: Any) -> Path:
+        out = out_dir / f"take_{k + 1}.mp4"
+        try:
+            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+        except OmniError as e:  # Omni fails intermittently with a generic INVALID_ARGUMENT; retry once
+            log.warning("take %d failed (%s); retrying once", k + 1, e)
+            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+
+    def score(k: int, path: Path) -> dict[str, Any]:
+        # score the UNLABELLED video (the badge could confuse the verifier)
+        raw = work_dir_for(path) / "raw.mp4"
         conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
         row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
                "usable": conf["usable"], "conformance": conf}  # fmt: skip
         if brief is not None:
             from godshot import direct as direct_mod  # S14
 
-            pres = direct_mod.preservation(raw, brief, work_dir=work_dir_for(path) / "preservation")
-            row |= {"preservation": pres["score"], "kept": f"{pres['kept']}/{pres['n']}",
-                    "combined": direct_mod.combined_score(conf["score"], pres["score"], w_preserve),
-                    "preservation_items": pres["items"]}  # fmt: skip
+            work = work_dir_for(path)
+            pres = direct_mod.preservation(raw, brief, work_dir=work / "preservation", spec=spec)
+            ful = direct_mod.fulfilment(raw, spec, work_dir=work / "fulfilment") if spec is not None else None
+            row |= {
+                "preservation": pres["score"], "kept": f"{pres['kept']}/{pres['n']}",
+                "fulfilment": ful["score"] if ful else None,
+                "done": f"{ful['kept']}/{ful['n']}" if ful else None,
+                "combined": direct_mod.combined_score(conf["score"], pres["score"], w_preserve,
+                                                      ful["score"] if ful else None),
+                "preservation_items": pres["items"], "fulfilment_items": ful["items"] if ful else [],
+                "_pres": pres, "_ful": ful,
+            }  # fmt: skip
         return row
 
+    def rank(r: dict[str, Any]) -> tuple[float, int]:
+        return (r.get("combined", r["score"]), r["usable"])
+
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
-        takes = list(pool.map(one, range(n)))
-    best = max(takes, key=lambda r: (r.get("combined", r["score"]), r["usable"]))
+        takes = list(pool.map(lambda k: score(k, make(k, pack)), range(n)))
+
+    critiques = []
+    if pack is not None and critic_rounds > 0:
+        from dataclasses import replace
+
+        from godshot import direct as direct_mod  # S14
+
+        corrections: list[str] = []
+        for r in range(critic_rounds):
+            best = max(takes, key=rank)
+            crit = direct_mod.critique(
+                Path(best["video"]),
+                replace(pack, corrections=list(corrections)),
+                direct_mod.score_summary(best["conformance"], best.get("_pres"), best.get("_ful")),
+            )
+            (out_dir / "direct").mkdir(parents=True, exist_ok=True)
+            (out_dir / "direct" / f"critique_{r + 1}.json").write_text(
+                json.dumps({"take": best["take"], **crit.model_dump()}, indent=2) + "\n", encoding="utf-8"
+            )
+            critiques.append({"round": r + 1, "on_take": best["take"], "verdict": crit.verdict,
+                              "issues": [i.model_dump() for i in crit.issues]})  # fmt: skip
+            if crit.verdict == "accept" or not crit.corrections.strip():
+                break
+            corrections.append(crit.corrections.strip())
+            k = n + r
+            takes.append(score(k, make(k, replace(pack, corrections=list(corrections)))))
+
+    best = max(takes, key=rank)
     final = out_dir / "reshoot_best.mp4"
     shutil.copyfile(best["video"], final)
+    hidden = ("conformance", "preservation_items", "fulfilment_items", "_pres", "_ful")
     summary = {
         "label": AI_LABEL,
         "video": str(final),
@@ -810,14 +863,15 @@ def reshoot_best(
         "score": best["score"],
         "hits": best["hits"],
         "usable": best["usable"],
-        "takes": [{k: v for k, v in r.items() if k not in ("conformance", "preservation_items")}
-                  for r in takes],
+        "takes": [{k: v for k, v in r.items() if k not in hidden} for r in takes],
         "checks": best["conformance"]["checks"],
     }
     if brief is not None:  # S14
-        summary |= {"directed": direct, "preservation": best["preservation"], "kept": best["kept"],
+        summary |= {"directed": direct, "request": request, "preservation": best["preservation"],
+                    "kept": best["kept"], "fulfilment": best.get("fulfilment"), "done": best.get("done"),
                     "combined": best["combined"], "w_preserve": w_preserve,
-                    "preservation_items": best["preservation_items"]}  # fmt: skip
+                    "preservation_items": best["preservation_items"],
+                    "fulfilment_items": best.get("fulfilment_items", []), "critiques": critiques}  # fmt: skip
     (out_dir / "reshoot_best.json").write_text(
         json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
     )

@@ -1,14 +1,18 @@
-"""Scene analyst + director agents for re-shoots (Gemini only).
+"""Scene analyst, edit interpreter, director and critic agents for re-shoots (Gemini only).
 
 Spec: S14 (.claude/specs/S14-direct.md) — owner: Akash.
 
     original clip ──► analyze_scene (Argon, video) ──► SceneBrief: intent, beats, performance, must-preserve
     orig + edited map ──► scene_diff (pure geometry) ──► what changed, in numbers
-    brief + diff ──► direct (Argon, HIGH thinking) ──► Direction: how bodies must move now, intent kept
-    S12 geometric prompt + Direction ──► directed_prompt ──► Omni
-    generated clip ──► preservation (Decisions) ──► are the must-preserve elements still there?
+    brief + diff + free-text request ──► interpret (Hydrogen) ──► ChangeSpec: typed changes, which
+                                         must-preserve items are LOCKED vs RELEASED, success checks
+    brief + diff + spec ──► direct (Argon, HIGH) ──► Direction: how bodies (and, if asked, the scene) change
+    S12 geometric prompt + Pack ──► compose (budgeted) ──► Omni
+    take ──► preservation (locked items) + fulfilment (success checks) via Decisions
+    take ──► critique (Argon, video) ──► accept | revise + corrections for the next take
 
-The S12 geometric prompt stays authoritative: agents direct the PERFORMANCE, never the camera or positions.
+The S12 geometric prompt stays first and verbatim: agents direct the PERFORMANCE and requested scene changes,
+never the camera path or positions.
 """
 
 from __future__ import annotations
@@ -17,10 +21,11 @@ import json
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,11 +40,15 @@ PROMPTS = Path(__file__).resolve().parent / "prompts"
 # S02 experiment: MEDIUM reported 0 thinking tokens and missed an orbit that HIGH got right
 THINKING_LEVEL = "HIGH"
 ANALYST_FPS = 4
+CRITIC_FPS = 4
 PATH_SAMPLES = 60
 MAX_PRESERVE = 8
+MAX_SUCCESS = 6
 PRESERVE_FRAMES = (0.2, 0.5, 0.8)
 KEEP_P = 0.5
 MOVED_M = 0.3  # an entity moved if its position changed by more than this (room units ≈ m)
+# Omni accepted a 4.6k-char directed prompt (S14 probe); stay under it. Lower-priority sections drop first.
+MAX_PROMPT_CHARS = 4400
 
 
 # --------------------------------------------------------------------------- agent outputs
@@ -82,9 +91,37 @@ class SceneBrief(_M):
     must_preserve: list[PreserveItem] = Field(max_length=MAX_PRESERVE)
 
 
+ChangeKind = Literal["blocking", "camera", "timing", "performance", "environment", "event", "framing"]
+
+
+class Change(_M):
+    kind: ChangeKind
+    what: str
+    source: Literal["map", "request"]
+
+
+class Release(_M):
+    index: int  # into SceneBrief.must_preserve
+    reason: str
+
+
+class SuccessCheck(_M):
+    element: str
+    check: str  # yes/no question, answered YES when the requested change is visible
+
+
+class ChangeSpec(_M):
+    summary: str
+    changes: list[Change]
+    locked: list[int] = Field(default_factory=list)
+    released: list[Release] = Field(default_factory=list)
+    success_checks: list[SuccessCheck] = Field(default_factory=list, max_length=MAX_SUCCESS)
+    assumptions: list[str] = Field(default_factory=list)
+
+
 class Adaptation(_M):
     who: str
-    change: str  # what the edit changed for this person, in plain words
+    change: str  # what the edit changed for this person/thing, in plain words
     reasoning: str  # the physical / dramatic reasoning
     behavior: str  # the adjusted behaviour
 
@@ -99,22 +136,57 @@ class Direction(_M):
     change_summary: str
     adaptations: list[Adaptation]
     retiming: list[Retime] = Field(default_factory=list)
-    preserved: list[str] = Field(default_factory=list)  # how each must-preserve element survives
+    preserved: list[str] = Field(default_factory=list)  # how each LOCKED element survives
     conflicts: list[str] = Field(default_factory=list)
     performance_prompt: str
+    scene_changes_prompt: str = ""  # requested non-body changes (light, weather, props, events)
+
+
+IssueKind = Literal[
+    "identity", "wardrobe", "action", "physics", "blocking", "camera", "environment", "request", "artifact"
+]
+
+
+class Issue(_M):
+    kind: IssueKind
+    at: str  # MM:SS–MM:SS or "throughout"
+    problem: str
+    fix: str
+
+
+class Critique(_M):
+    verdict: Literal["accept", "revise"]
+    issues: list[Issue] = Field(default_factory=list)
+    corrections: str = ""  # 1–4 sentences for the next take; empty when accepted
+
+
+@dataclass
+class Pack:
+    """Everything the prompt composer needs for one take."""
+
+    brief: SceneBrief
+    direction: Direction
+    spec: ChangeSpec | None = None
+    request: str = ""
+    corrections: list[str] = field(default_factory=list)  # critic rounds, oldest first
 
 
 # --------------------------------------------------------------------------- Gemini call (cached)
 
 
 def _generate_json(
-    key_parts: list[bytes | str], contents: Callable[[], list[Any]], schema: type[BaseModel], kind: str
+    key_parts: list[bytes | str],
+    contents: Callable[[], list[Any]],
+    schema: type[BaseModel],
+    kind: str,
+    model: str | None = None,
 ) -> dict:
-    """One Argon call with a JSON schema, cached on disk; returns the parsed JSON.
+    """One Gemini call with a JSON schema, cached on disk; returns the parsed JSON.
 
     `contents` is only called on a cache miss, so a cached run never uploads anything.
     """
     cfg = load_config()
+    model = model or cfg.MODEL_EXTRACT
 
     def call() -> dict[str, Any]:
         from google.genai import types
@@ -122,7 +194,7 @@ def _generate_json(
         client = get_client()  # shared client; keep the reference for the whole call
         t0 = time.perf_counter()
         resp = client.models.generate_content(
-            model=cfg.MODEL_EXTRACT,
+            model=model,
             contents=contents(),
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -136,9 +208,24 @@ def _generate_json(
         return {"text": resp.text or "", "usage": usage, "latency_s": round(time.perf_counter() - t0, 2)}
 
     params = json.dumps({"thinking": THINKING_LEVEL, "schema": schema.model_json_schema()}, sort_keys=True)
-    payload = cached([cfg.MODEL_EXTRACT, *key_parts, params], call, kind=kind)
+    payload = cached([model, *key_parts, params], call, kind=kind)
     log.info("%s: %.1fs, tokens %s", kind, payload.get("latency_s", 0), payload.get("usage"))
     return json.loads(payload["text"])
+
+
+def _video_part(video: Path, fps: int) -> Any:
+    from google.genai import types
+
+    from godshot import ingest
+
+    return types.Part(
+        file_data=types.FileData(file_uri=ingest.upload(video), mime_type="video/mp4"),
+        video_metadata=types.VideoMetadata(fps=fps),
+    )
+
+
+def _rules(name: str) -> str:
+    return (PROMPTS / name).read_text(encoding="utf-8").strip()
 
 
 def _map_summary(scene: SceneV1) -> str:
@@ -151,7 +238,7 @@ def _map_summary(scene: SceneV1) -> str:
         "objects": [{"what": o.visual_description, "at": [round(v, 2) for v in o.center]}
                     for o in scene.objects],
         "camera": [[k.t, round(k.x, 2), round(k.y, 2), round(k.yaw_deg)] for k in scene.camera.track],
-    }
+    }  # fmt: skip
     text = json.dumps(data)
     for i, d in names.items():  # belt and braces: ids must never reach a prompt
         text = text.replace(f'"{i}"', json.dumps(d))
@@ -163,23 +250,11 @@ def _map_summary(scene: SceneV1) -> str:
 
 def analyze_scene(clip: Path, scene_orig: SceneV1, fps: int = ANALYST_FPS) -> SceneBrief:
     """Argon watches the ORIGINAL clip and writes the scene brief (intent, beats, must-preserve)."""
-    from godshot import ingest
-
     clip = Path(clip)
-    rules = (PROMPTS / "scene_brief.md").read_text(encoding="utf-8").strip()
-    text = f"{rules}\n\nBLOCKING MAP (overhead, room units ≈ m):\n{_map_summary(scene_orig)}"
-
-    def contents() -> list[Any]:
-        from google.genai import types
-
-        video = types.Part(
-            file_data=types.FileData(file_uri=ingest.upload(clip), mime_type="video/mp4"),
-            video_metadata=types.VideoMetadata(fps=fps),
-        )
-        return [video, text]
-
+    map_text = _map_summary(scene_orig)
+    text = f"{_rules('scene_brief.md')}\n\nBLOCKING MAP (overhead, room units ≈ m):\n{map_text}"
     key = [clip.read_bytes(), text, f"fps={fps}"]
-    data = _generate_json(key, contents, SceneBrief, kind="scene_brief")
+    data = _generate_json(key, lambda: [_video_part(clip, fps), text], SceneBrief, kind="scene_brief")
     data["must_preserve"] = data.get("must_preserve", [])[:MAX_PRESERVE]
     return SceneBrief.model_validate(data)
 
@@ -236,7 +311,7 @@ def _nearest_object(scene: SceneV1, xy: list[float]) -> str | None:
 
 
 def scene_diff(scene_orig: SceneV1, scene_edited: SceneV1, duration_s: float | None = None) -> dict[str, Any]:
-    """What the edit changed, as geometry facts for the director (no judgement, no ids)."""
+    """What the map edit changed, as geometry facts for the agents (no judgement, no ids)."""
     from godshot.reshoot import shot_facts  # S12
 
     dur = min(duration_s or scene_edited.clip.duration_s, scene_edited.clip.duration_s)
@@ -250,13 +325,16 @@ def scene_diff(scene_orig: SceneV1, scene_edited: SceneV1, duration_s: float | N
             row["status"] = "added"
         else:
             b = actor_motion(before, dur)
+            changed = (
+                abs(after["path_m"] - b["path_m"]) > MOVED_M
+                or math.dist(after["end"], b["end"]) > MOVED_M
+                or math.dist(after["start"], b["start"]) > MOVED_M
+            )
             row |= {
-                "status": "changed" if (abs(after["path_m"] - b["path_m"]) > MOVED_M
-                                        or math.dist(after["end"], b["end"]) > MOVED_M
-                                        or math.dist(after["start"], b["start"]) > MOVED_M) else "unchanged",
+                "status": "changed" if changed else "unchanged",
                 "before": b,
-                "speed_ratio": (round(after["speed_mps"] / b["speed_mps"], 2)
-                                if b["speed_mps"] > 0.05 else None),
+                "speed_ratio": (round(after["moving_speed_mps"] / b["moving_speed_mps"], 2)
+                                if b["moving_speed_mps"] > 0.05 else None),
                 "end_shift_m": round(math.dist(after["end"], b["end"]), 2),
                 "camera_distance_m": {"before": _mean_cam_dist(scene_orig, before, dur),
                                       "after": _mean_cam_dist(scene_edited, a, dur)},
@@ -277,31 +355,77 @@ def scene_diff(scene_orig: SceneV1, scene_edited: SceneV1, duration_s: float | N
         elif math.dist(o.center, b.center) > MOVED_M or abs(o.rotation_deg - b.rotation_deg) > 10:
             objects.append({"what": o.visual_description, "status": "moved", "from": b.center, "to": o.center,
                             "moved_m": round(math.dist(o.center, b.center), 2)})  # fmt: skip
+    edited_objs = {o.id for o in scene_edited.objects}
+    objects += [{"what": o.visual_description, "status": "removed"} for o in scene_orig.objects
+                if o.id not in edited_objs]  # fmt: skip
 
     cam_b, cam_a = shot_facts(scene_orig, dur), shot_facts(scene_edited, dur)
+    before = [f"{s['mmss0']}–{s['mmss1']}: {s['move']}" for s in cam_b["segments"]]
+    after = [f"{s['mmss0']}–{s['mmss1']}: {s['move']}" for s in cam_a["segments"]]
     return {
         "duration_s": round(dur, 2),
         "people": people,
         "objects": objects,
-        "camera": {
-            "before": [f"{s['mmss0']}–{s['mmss1']}: {s['move']}" for s in cam_b["segments"]],
-            "after": [f"{s['mmss0']}–{s['mmss1']}: {s['move']}" for s in cam_a["segments"]],
-            "start_framing_after": cam_a["start"],
-            "end_framing_after": cam_a["end"],
-        },
+        "camera": {"changed": before != after or cam_b["lens"] != cam_a["lens"], "before": before,
+                   "after": after, "lens_after": cam_a["lens"], "start_framing_after": cam_a["start"],
+                   "end_framing_after": cam_a["end"]},
+    }  # fmt: skip
+
+
+# --------------------------------------------------------------------------- agent 2: edit interpreter
+
+
+def normalize_spec(spec: ChangeSpec, n_items: int) -> ChangeSpec:
+    """Every must-preserve index is exactly one of locked/released; released wins; out-of-range dropped."""
+    released = {r.index: r for r in spec.released if 0 <= r.index < n_items}
+    locked = [i for i in range(n_items) if i not in released]
+    update = {
+        "released": sorted(released.values(), key=lambda r: r.index),
+        "locked": locked,
+        "success_checks": spec.success_checks[:MAX_SUCCESS],
     }
+    return spec.model_copy(update=update)
 
 
-# --------------------------------------------------------------------------- agent 2: director
+def interpret(brief: SceneBrief, diff: dict[str, Any], request: str = "") -> ChangeSpec:
+    """Hydrogen turns the map diff + optional free-text request into a typed change spec with lock/release."""
+    items = "\n".join(f"[{i}] {p.element}" for i, p in enumerate(brief.must_preserve))
+    text = "\n\n".join([
+        _rules("interpret.md"),
+        f"USER REQUEST (free text; may be empty):\n{request.strip() or '(none)'}",
+        f"MAP DIFF (edited vs original, geometry facts):\n{json.dumps(diff, indent=1)}",
+        f"SCENE BRIEF:\n{brief.model_dump_json(indent=1)}",
+        f"MUST-PRESERVE ITEMS (by index):\n{items}",
+    ])
+    model = load_config().MODEL_CHEAP
+    data = _generate_json([text], lambda: [text], ChangeSpec, kind="change_spec", model=model)
+    return normalize_spec(ChangeSpec.model_validate(data), len(brief.must_preserve))
 
 
-def direct(brief: SceneBrief, scene_orig: SceneV1, scene_edited: SceneV1,
-           duration_s: float | None = None) -> Direction:  # fmt: skip
-    """Argon (HIGH thinking) deliberates how behaviour/physics must change for the edit, intent kept."""
-    rules = (PROMPTS / "direct.md").read_text(encoding="utf-8").strip()
+def locked_items(brief: SceneBrief, spec: ChangeSpec | None) -> list[PreserveItem]:
+    if spec is None:
+        return list(brief.must_preserve)
+    return [brief.must_preserve[i] for i in spec.locked if 0 <= i < len(brief.must_preserve)]
+
+
+# --------------------------------------------------------------------------- agent 3: director
+
+
+def direct(brief: SceneBrief, scene_orig: SceneV1, scene_edited: SceneV1, duration_s: float | None = None,
+           spec: ChangeSpec | None = None, request: str = "") -> Direction:  # fmt: skip
+    """Argon (HIGH) deliberates how behaviour/physics (and requested scene changes) must play, intent kept."""
     diff = scene_diff(scene_orig, scene_edited, duration_s)
-    text = (f"{rules}\n\nSCENE BRIEF:\n{brief.model_dump_json(indent=1)}\n\n"
+    text = (f"{_rules('direct.md')}\n\nSCENE BRIEF:\n{brief.model_dump_json(indent=1)}\n\n"
             f"SCENE DIFF (edited vs original, geometry facts):\n{json.dumps(diff, indent=1)}")  # fmt: skip
+    if spec is not None:
+        locked = "\n".join(f"- {p.element}" for p in locked_items(brief, spec)) or "- (none)"
+        released = "\n".join(f"- {brief.must_preserve[r.index].element}: {r.reason}" for r in spec.released)
+        text += "\n\n" + "\n\n".join([
+            f"USER REQUEST:\n{request.strip() or '(none: map edit only)'}",
+            f"CHANGE SPEC:\n{spec.model_dump_json(indent=1)}",
+            f"LOCKED (must survive):\n{locked}",
+            f"RELEASED (the user asked to change these; do NOT preserve them):\n{released or '- (none)'}",
+        ])
     return Direction.model_validate(_generate_json([text], lambda: [text], Direction, kind="direction"))
 
 
@@ -313,84 +437,187 @@ CONFLICT_RULE = (
 )
 
 
-def directed_prompt(base: str, brief: SceneBrief, direction: Direction) -> str:
-    """S12's geometric prompt (verbatim, first) + performance direction + must-keep list."""
-    keep = "; ".join(p.element for p in brief.must_preserve)
+def _released_kinds(spec: ChangeSpec | None) -> set[str]:
+    return {c.kind for c in spec.changes if c.source == "request"} if spec else set()
+
+
+def compose(base: str, pack: Pack | tuple[SceneBrief, Direction]) -> str:
+    """S12 geometric prompt (verbatim, first) + direction sections, within MAX_PROMPT_CHARS.
+
+    Sections in priority order; the lowest-priority ones are dropped first if the prompt is too long. The
+    base is never cut.
+    """
+    if isinstance(pack, tuple):
+        pack = Pack(brief=pack[0], direction=pack[1])
+    brief, d, spec = pack.brief, pack.direction, pack.spec
+    requested = _released_kinds(spec)
+    keep = "; ".join(p.element for p in locked_items(brief, spec))
     wardrobe = "; ".join(f"{p.who}: {p.wardrobe}" for p in brief.performances if p.wardrobe)
-    parts = [
-        base.rstrip(),
-        f"\nSCENE: {brief.logline} {brief.intent}",
-        f"PERFORMANCE ({CONFLICT_RULE}) {direction.performance_prompt}",
-        f"MUST KEEP: {keep}." if keep else "",
-        f"WARDROBE: {wardrobe}." if wardrobe else "",
-        f"LIGHT AND ATMOSPHERE: {brief.environment}",
+    sections = [  # (priority: lower = more important, text)
+        (1, f"PERFORMANCE ({CONFLICT_RULE}) {d.performance_prompt}"),
+        (2, f"REQUESTED CHANGES: {d.scene_changes_prompt}" if d.scene_changes_prompt else ""),
+        (3, "CORRECTIONS FROM THE PREVIOUS TAKE: " + " ".join(pack.corrections) if pack.corrections else ""),
+        (4, f"MUST KEEP: {keep}." if keep else ""),
+        (5, f"WARDROBE: {wardrobe}." if wardrobe and "performance" not in requested else ""),
+        (6, f"LIGHT AND ATMOSPHERE: {brief.environment}" if "environment" not in requested else ""),
+        (7, f"SCENE: {brief.logline} {brief.intent}"),
     ]
-    return "\n".join(p for p in parts if p)
+    kept = [(p, s) for p, s in sections if s]
+    prompt = ""
+    while kept:
+        prompt = "\n".join([base.rstrip(), *(s for _, s in sorted(kept))])
+        if len(prompt) <= MAX_PROMPT_CHARS:
+            break
+        kept.remove(max(kept))  # drop the least important section
+    else:
+        prompt = base.rstrip()
+    return prompt
 
 
-# --------------------------------------------------------------------------- preservation score
+def directed_prompt(base: str, brief: SceneBrief, direction: Direction) -> str:
+    """Back-compatible wrapper (brief + direction, no spec)."""
+    return compose(base, Pack(brief=brief, direction=direction))
 
 
-def preservation(video: Path, brief: SceneBrief, work_dir: Path | None = None) -> dict[str, Any]:
-    """Ask each must-preserve check (Decisions `noul`) on 3 frames of the video. score = mean P(yes)."""
-    from godshot import ingest, verify
+# --------------------------------------------------------------------------- scoring (Decisions)
+
+
+def _frames(video: Path, work: Path) -> tuple[Path, list[Path]]:
+    from godshot import ingest
     from godshot.reshoot import work_dir_for
 
     video = Path(video)
     raw = work_dir_for(video) / "raw.mp4"
     if raw.exists():  # labelled reshoot() output: score the unlabelled video
         video = raw
-    work = Path(work_dir) if work_dir else video.parent / f"{video.stem}_preservation"
     info = ingest.probe(video, check_length=False)
     last = info.duration_s - 1.2 / info.fps
-    frames = [ingest.frame_at(video, min(f * info.duration_s, last), work / "frames")
-              for f in PRESERVE_FRAMES]
-    items = []
-    for p in brief.must_preserve:
+    return video, [ingest.frame_at(video, min(f * info.duration_s, last), work / "frames")
+                   for f in PRESERVE_FRAMES]  # fmt: skip
+
+
+def _ask_items(video: Path, items: Sequence[tuple[str, str]], work: Path, name: str) -> dict[str, Any]:
+    """Ask each (element, yes/no check) on 3 frames; score = mean P(yes); kept when P(yes) ≥ 0.5."""
+    from godshot import verify
+
+    work = Path(work)
+    video, frames = _frames(video, work)
+    rows = []
+    for element, check in items:
         criteria = NoulCriteria(
-            true_description=f"Yes: {p.element} is clearly present in at least one of the frames.",
-            false_description=f"No: {p.element} is missing, changed or not visible in any frame.",
+            true_description=f"Yes: {element} is clearly visible in at least one of the frames.",
+            false_description=f"No: {element} is missing, changed or not visible in any frame.",
         )
-        q = Question(type="noul", instructions=p.check, criteria=criteria)
         try:
+            q = Question(type="noul", instructions=check, criteria=criteria)
             r = verify.ask(q, frames, context="Three frames, in time order, from one continuous video shot.")
             p_yes = r.p_yes
         except RuntimeError as e:
-            log.warning("preservation check failed (%s): %s", p.element, e)
+            log.warning("%s check failed (%s): %s", name, element, e)
             p_yes = None
-        items.append({"element": p.element, "check": p.check, "p_yes": p_yes,
-                      "kept": p_yes is not None and p_yes >= KEEP_P})  # fmt: skip
-    answered = [i["p_yes"] for i in items if i["p_yes"] is not None]
+        rows.append({"element": element, "check": check, "p_yes": p_yes,
+                     "kept": p_yes is not None and p_yes >= KEEP_P})  # fmt: skip
+    answered = [r["p_yes"] for r in rows if r["p_yes"] is not None]
     result = {
-        "score": round(sum(answered) / len(answered), 3) if answered else 0.0,
-        "kept": sum(i["kept"] for i in items),
-        "n": len(items),
-        "frames": [str(f) for f in frames],
-        "items": items,
+        "score": round(sum(answered) / len(answered), 3) if answered else None,
+        "kept": sum(r["kept"] for r in rows),
+        "n": len(rows),
+        "source": str(video),
+        "items": rows,
     }
     work.mkdir(parents=True, exist_ok=True)
-    (work / "preservation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    (work / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 
 
-def combined_score(conformance: float, preserve: float | None, w_preserve: float) -> float:
-    """Rank takes on both: follows the edit (conformance) AND keeps the scene (preservation)."""
-    if preserve is None:
+def preservation(video: Path, brief: SceneBrief, work_dir: Path | None = None,
+                 spec: ChangeSpec | None = None) -> dict[str, Any]:  # fmt: skip
+    """Are the LOCKED must-preserve elements still there? (All items when there is no spec.)"""
+    video = Path(video)
+    work = Path(work_dir) if work_dir else video.parent / f"{video.stem}_preservation"
+    r = _ask_items(video, [(p.element, p.check) for p in locked_items(brief, spec)], work, "preservation")
+    r["score"] = r["score"] if r["score"] is not None else 0.0
+    return r
+
+
+def fulfilment(video: Path, spec: ChangeSpec, work_dir: Path | None = None) -> dict[str, Any] | None:
+    """Did the requested changes happen? None when the spec has no success checks."""
+    if not spec.success_checks:
+        return None
+    video = Path(video)
+    work = Path(work_dir) if work_dir else video.parent / f"{video.stem}_fulfilment"
+    return _ask_items(video, [(c.element, c.check) for c in spec.success_checks], work, "fulfilment")
+
+
+def combined_score(conformance: float, preserve: float | None, w_preserve: float,
+                   fulfil: float | None = None) -> float:  # fmt: skip
+    """Rank takes on: follows the map (conformance) AND keeps the scene / does what was asked."""
+    scene = [s for s in (preserve, fulfil) if s is not None]
+    if not scene:
         return conformance
-    return round((1 - w_preserve) * conformance + w_preserve * preserve, 4)
+    return round((1 - w_preserve) * conformance + w_preserve * sum(scene) / len(scene), 4)
+
+
+# --------------------------------------------------------------------------- agent 4: critic
+
+
+def critique(video: Path, pack: Pack, scores: dict[str, Any]) -> Critique:
+    """Argon watches a generated take and names what to fix (identity, action, physics, request …)."""
+    from godshot.reshoot import work_dir_for
+
+    video = Path(video)
+    raw = work_dir_for(video) / "raw.mp4"
+    video = raw if raw.exists() else video
+    spec = pack.spec
+    locked = [p.element for p in locked_items(pack.brief, spec)]
+    text = "\n\n".join([
+        _rules("critic.md"),
+        f"SCENE BRIEF (the original shot):\n{pack.brief.model_dump_json(indent=1)}",
+        f"USER REQUEST:\n{pack.request.strip() or '(none: map edit only)'}",
+        f"CHANGE SPEC:\n{spec.model_dump_json(indent=1) if spec else '(none)'}",
+        "LOCKED ELEMENTS (must survive):\n" + "\n".join(f"- {e}" for e in locked),
+        f"DIRECTION GIVEN FOR THIS TAKE:\n{pack.direction.performance_prompt}\n"
+        f"{pack.direction.scene_changes_prompt}",
+        f"AUTOMATIC SCORES (frame checks; trust them less than what you see):\n"
+        f"{json.dumps(scores, indent=1, default=str)}",
+    ])
+    key = [video.read_bytes(), text, f"fps={CRITIC_FPS}"]
+    return Critique.model_validate(
+        _generate_json(key, lambda: [_video_part(video, CRITIC_FPS), text], Critique, kind="critique")
+    )
+
+
+def score_summary(conf: dict[str, Any], pres: dict[str, Any] | None, ful: dict[str, Any] | None) -> dict:
+    """Compact scores for the critic: failing map checks by template + items lost / not done."""
+    misses: dict[str, int] = {}
+    for c in conf.get("checks", []):
+        if c.get("usable") and not c.get("hit"):
+            misses[c["template"]] = misses.get(c["template"], 0) + 1
+    return {
+        "map_conformance": conf.get("score"),
+        "map_misses_by_template": misses,
+        "locked_elements_lost": [i["element"] for i in (pres or {}).get("items", []) if not i["kept"]],
+        "requested_changes_missing": [i["element"] for i in (ful or {}).get("items", []) if not i["kept"]],
+    }
+
+
+# --------------------------------------------------------------------------- orchestration
 
 
 def prepare(clip: Path, scene_orig: SceneV1, scene_edited: SceneV1, out_dir: Path,
-            duration_s: float | None = None) -> tuple[SceneBrief, Direction]:  # fmt: skip
-    """Run both agents once and save brief.json, diff.json, direction.json to out_dir/direct/."""
+            duration_s: float | None = None, request: str = "") -> Pack:  # fmt: skip
+    """Analyst → diff → interpreter → director, once per edit; artifacts in out_dir/direct/."""
     d = Path(out_dir) / "direct"
     d.mkdir(parents=True, exist_ok=True)
     brief = analyze_scene(clip, scene_orig)
     (d / "brief.json").write_text(brief.model_dump_json(indent=2) + "\n", encoding="utf-8")
     diff = scene_diff(scene_orig, scene_edited, duration_s)
     (d / "diff.json").write_text(json.dumps(diff, indent=2) + "\n", encoding="utf-8")
-    direction = direct(brief, scene_orig, scene_edited, duration_s)
+    spec = interpret(brief, diff, request)
+    (d / "change_spec.json").write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    direction = direct(brief, scene_orig, scene_edited, duration_s, spec=spec, request=request)
     (d / "direction.json").write_text(direction.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    log.info("direct: %d must-preserve items, %d adaptations, %d conflicts", len(brief.must_preserve),
-             len(direction.adaptations), len(direction.conflicts))
-    return brief, direction
+    log.info("direct: %d locked / %d released, %d success checks, %d adaptations, %d conflicts",
+             len(spec.locked), len(spec.released), len(spec.success_checks), len(direction.adaptations),
+             len(direction.conflicts))  # fmt: skip
+    return Pack(brief=brief, direction=direction, spec=spec, request=request)
