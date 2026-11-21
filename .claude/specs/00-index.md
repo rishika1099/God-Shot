@@ -5,7 +5,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | Spec | Title | Owner | Depends on | Status |
 |---|---|---|---|---|
 | S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | done |
-| S01 | Ingest: upload + frames | Prajesh | S00 | todo |
+| S01 | Ingest: upload + frames | Prajesh | S00 | done |
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | todo |
 | S03 | Geometry: projection math | Siva | S00 | todo |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | todo |
