@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw
+from pydantic import BaseModel, Field
 
 from godshot import geometry
 from godshot.cache import cached
@@ -33,6 +34,10 @@ AI_LABEL = "AI-generated re-shoot"
 # Tasks whose output length + aspect come from the input video (verified for `edit`; VERIFY upscale).
 _DURATION_FROM_INPUT = {"edit", "upscale"}
 MAX_REFS = 6
+# Omni output length. `edit` takes its length from the guide video: 12 s verified live (2026-11-21); the docs
+# say ≤ 15 s per output (VERIFY above 12 s). Text→video durations are "5s"–"8s" (models.md).
+OMNI_EDIT_MAX_S = 15.0
+TEXT_MIN_S, TEXT_MAX_S = 5, 8
 OMNI_TIMEOUT_S = 300.0
 OMNI_POLL_S = 5.0
 
@@ -328,6 +333,7 @@ def render_blockout(
     t0: float = 0.0,
     t1: float | None = None,
     colors: dict[str, str] | None = None,
+    time_scale: float = 1.0,
 ) -> Path:
     """Grey-box previs of `scene` filmed along its EXACT camera track (x, y, yaw, hfov), as an mp4.
 
@@ -340,7 +346,7 @@ def render_blockout(
     w, h = size
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    n = max(1, round((t1 - t0) * fps))
+    n = max(1, round((t1 - t0) / time_scale * fps))  # time_scale > 1 plays the scene faster to fit
     proc = subprocess.Popen(
         [
             shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -353,7 +359,7 @@ def render_blockout(
     assert proc.stdin is not None
     try:
         for i in range(n):
-            proc.stdin.write(_blockout_frame(scene, t0 + i / fps, w, h, colors).tobytes())
+            proc.stdin.write(_blockout_frame(scene, t0 + i / fps * time_scale, w, h, colors).tobytes())
     finally:
         proc.stdin.close()
         err = proc.stderr.read().decode() if proc.stderr else ""
@@ -502,7 +508,7 @@ def _actor_motion(scene: SceneV1, dur: float) -> list[str]:
         dx, dy = x1 - x0, y1 - y0
         lat, fw = dx * right[0] + dy * right[1], dx * fwd[0] + dy * fwd[1]
         if math.hypot(lat, fw) < 0.4:
-            lines.append(f"{a.visual_description} stays in place")
+            lines.append(f"{a.visual_description} keeps the same spot on the floor")
         elif abs(lat) >= abs(fw):
             lines.append(
                 f"{a.visual_description} walks from {'left to right' if lat > 0 else 'right to left'}"
@@ -532,25 +538,65 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous shot, no cuts, no zoom. Keep the room, the people, their faces and their clothing "
-    "identical to the reference images."
+    "One continuous shot, no cuts. Keep the room, the people, their faces, their clothing, their "
+    "performance and every event identical to the original clip and the reference images."
 )
 
 
-def describe_shot(scene_edited: SceneV1, duration_s: float | None = None, polish: bool = False) -> str:
+# With S14 directing, the base prompt carries only camera + positions; the director owns the performance
+# (and may change it on request), so the base must not insist the acting stays identical.
+SHOT_RULES_DIRECTED = (
+    "One continuous shot, no cuts. Keep the room and the people's faces identical to the reference images."
+)
+
+
+def _fov_line(hfov: float, orig_hfov: float | None) -> str | None:
+    if orig_hfov is None or abs(hfov - orig_hfov) < 2:
+        return None
+    feel = "tighter framing, like zooming in" if hfov < orig_hfov else "wider framing, like zooming out"
+    return f"Lens: a {hfov:.0f}° horizontal field of view instead of the original {orig_hfov:.0f}° ({feel})."
+
+
+def _beat_lines(beats: list[dict[str, Any]], time_scale: float) -> list[str]:
+    return [
+        f"{mmss(b['t0'] / time_scale)[:8]}–{mmss(b['t1'] / time_scale)[:8]}: {b['who']} {b['action']}"
+        for b in beats
+    ]
+
+
+def describe_shot(
+    scene_edited: SceneV1,
+    duration_s: float | None = None,
+    polish: bool = False,
+    beats: list[dict[str, Any]] | None = None,
+    orig_hfov: float | None = None,
+    time_scale: float = 1.0,
+    directed: bool = False,
+) -> str:
     """Edited map → concrete shot description. Deterministic template from geometry (same map, same text).
 
+    `beats`: the original performance (`performance_beats`), kept exactly. `orig_hfov`: describes an FOV edit.
+    `time_scale` > 1: the shot is played faster to fit Omni's maximum length; all times are rescaled.
+    `directed=True` (S14): camera + positions only; the director's sections describe the performance.
     `polish=True` asks Hydrogen (MODEL_CHEAP) to smooth the wording without changing any fact (cached).
     """
     f = shot_facts(scene_edited, duration_s)
-    lines = [f"A {f['duration_s']:g}-second shot on {f['lens']}.", f"At the start: {f['start']}."]
+    ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
+    out_len = f["duration_s"] / time_scale
+    lines = [f"A {out_len:g}-second shot on {f['lens']}.", f"At the start: {f['start']}."]
+    fov = _fov_line(scene_edited.camera.hfov_deg, orig_hfov)
+    if fov:
+        lines.insert(1, fov)
     for seg in f["segments"]:
         ev = f"; {'; '.join(seg['events'])}" if seg["events"] else ""
-        lines.append(f"{seg['mmss0']}–{seg['mmss1']}: the camera {seg['move']}{ev}.")
+        lines.append(f"{ts(seg['t0'])}–{ts(seg['t1'])}: the camera {seg['move']}{ev}.")
     lines.append(f"At the end: {f['end']}.")
     if f["actors"]:
-        lines.append(f"Throughout: {'; '.join(f['actors'])}.")
-    lines.append(SHOT_RULES)
+        lines.append(f"Floor positions: {'; '.join(f['actors'])}.")
+    if beats:
+        lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
+        lines += _beat_lines(beats, time_scale)
+    lines.append(SHOT_RULES_DIRECTED if directed else SHOT_RULES)
     text = "\n".join(lines)
     return _polish(text) if polish else text
 
@@ -573,19 +619,135 @@ def _polish(text: str) -> str:
     return cached([cfg.MODEL_CHEAP, prompt], call, kind="shot_description")
 
 
-def edit_prompt(scene_edited: SceneV1, colors: dict[str, str], duration_s: float | None = None) -> str:
-    """Prompt for Omni `edit`: which blockout shape is which real thing + the exact shot description."""
+def edit_prompt(
+    scene_edited: SceneV1,
+    colors: dict[str, str],
+    duration_s: float | None = None,
+    beats: list[dict[str, Any]] | None = None,
+    orig_hfov: float | None = None,
+    time_scale: float = 1.0,
+    directed: bool = False,
+) -> str:
+    """Prompt for Omni `edit`: the blockout gives ONLY the camera + positions.
+
+    Default: the people perform exactly as in the original (`beats`), and only the camera changes.
+    `directed=True` (S14): the director's PERFORMANCE / REQUESTED CHANGES sections (appended by
+    `direct.compose`) say what the people do, so this base does not insist the acting is unchanged.
+    """
     actor_ids = {a.id for a in scene_edited.actors}
     legend = [
         f"the {color_name(colors.get(e.id, e.color))} {'figure' if e.id in actor_ids else 'box'}"
         f" is {e.visual_description}"
         for e in [*scene_edited.actors, *scene_edited.objects]
     ]
+    only = "Change ONLY the camera position, angle, point of view and field of view."
+    if directed:
+        keep, only = "What the people do is described in the PERFORMANCE section below.", ""
+    elif beats:
+        keep = (
+            "The people must perform exactly as in the original clip (performance beats below): the same "
+            "actions, gestures, expressions, head turns and timing."
+        )
+    else:
+        keep = "The people behave exactly as in the reference images; do not invent new actions."
     return (
         "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
-        f"images. In the previs: {'; '.join(legend)}. Keep the camera motion, timing, framing and every "
-        "position EXACTLY as in the input video.\n" + describe_shot(scene_edited, duration_s)
+        "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and where "
+        f"people and things are; they do NOT show the performance. In the previs: {'; '.join(legend)}. "
+        f"Keep the camera motion, timing and framing EXACTLY as in the input video. {keep} {only}".rstrip()
+        + "\n"
+        + describe_shot(
+            scene_edited,
+            duration_s,
+            beats=beats,
+            orig_hfov=orig_hfov,
+            time_scale=time_scale,
+            directed=directed,
+        )
     )
+
+
+# --------------------------------------------------------------------------- performance beats
+
+
+class Beat(BaseModel):
+    t0: float = Field(ge=0)
+    t1: float = Field(ge=0)
+    who: str
+    action: str
+
+
+class _Beats(BaseModel):
+    beats: list[Beat] = Field(default_factory=list)
+
+
+PERFORMANCE_PROMPT = """You are watching one continuous film shot, {dur:.1f} seconds long.
+List what the people do in it, in time order, as short beats a director could re-stage exactly from
+another camera angle.
+
+Name people and things with these exact descriptions where they apply:
+{names}
+
+Rules:
+- 3 to {max_beats} beats. Each beat: t0 and t1 in seconds from the start, who, and what they do.
+- Describe actions, gestures, head turns, expressions, who is speaking (no dialogue text), and visible
+  events (an object moves, a door opens). Only what is visible. Never describe the camera or framing.
+- Keep each action short and concrete, e.g. "raises her robotic arm toward him" or "turns his head left".
+"""
+
+
+def performance_beats(
+    clip: Path, scene_orig: SceneV1, max_beats: int = 12, model: str | None = None
+) -> list[dict[str, Any]]:
+    """Timestamped action beats of the ORIGINAL clip (cached Gemini video call), so a re-shoot keeps the
+    performance and only the camera changes. Returns [] (with a warning) if the call fails."""
+    from google.genai import types
+
+    from godshot import ingest
+
+    cfg = load_config()
+    model = model or cfg.MODEL_CHEAP
+    clip = Path(clip)
+    dur = scene_orig.clip.duration_s
+    names = (
+        "\n".join(f"- {e.visual_description}" for e in [*scene_orig.actors, *scene_orig.objects])
+        or "- (none)"
+    )
+    prompt = PERFORMANCE_PROMPT.format(dur=dur, names=names, max_beats=max_beats)
+
+    def call() -> dict[str, Any]:
+        uri = ingest.upload(clip)
+        resp = get_client().models.generate_content(
+            model=model,
+            contents=[
+                types.Part(
+                    file_data=types.FileData(file_uri=uri, mime_type="video/mp4"),
+                    video_metadata=types.VideoMetadata(fps=cfg.FPS),
+                ),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=_Beats.model_json_schema(),
+                thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+            ),
+        )
+        return json.loads(resp.text or "{}")
+
+    try:
+        data = cached([ingest.sha256_file(clip), model, prompt, "beats.v1"], call, kind="performance")
+        beats = _Beats.model_validate(data).beats
+    except Exception as e:  # never block a re-shoot on this: fall back to "behave as in the references"
+        log.warning("performance beats unavailable for %s (%s: %s)", clip.name, type(e).__name__, e)
+        return []
+    out = []
+    for b in sorted(beats, key=lambda b: b.t0)[:max_beats]:
+        t0, t1 = min(b.t0, dur), min(max(b.t1, b.t0), dur)
+        if b.action.strip():
+            out.append(
+                {"t0": round(t0, 2), "t1": round(t1, 2), "who": b.who.strip(), "action": b.action.strip()}
+            )
+    return out
 
 
 # --------------------------------------------------------------------------- reference images + label
@@ -688,43 +850,78 @@ def reshoot(
     scene_edited: SceneV1,
     out: Path,
     resolution: str = "360p",
-    duration: str = "8s",
+    duration: str | None = None,
     mode: str = "blockout",
     polish: bool = False,
     take: int = 0,
+    direction: tuple[Any, Any] | None = None,
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
+    Length: the ORIGINAL clip's length by default (`duration` caps it, e.g. "6s"). If that exceeds what Omni
+    can return (OMNI_EDIT_MAX_S; text mode 5–8 s), the shot is played faster to fit instead of losing its end
+    (`time_scale` in reshoot.json).
+    The people keep their original performance: `performance_beats` (cached) goes into the prompt.
     mode="blockout" (default): map-exact grey-box guide + refs → Omni `edit` (motion comes from the map).
     mode="text": refs + the geometry-derived description → Omni image/reference→video (fallback).
     `take` > 0 asks for a different sample of the same request (used by `reshoot_best`).
+    `direction` = (SceneBrief, Direction) from S14 `direct.prepare`: the geometric prompt is kept verbatim and
+    the director's performance notes + must-keep list are appended (S14, Akash; opt-in).
     Artifacts go to `<out stem>_work/` (refs, blockout.mp4, raw.mp4 = unlabelled, reshoot.json).
     """
     if mode not in ("blockout", "text"):
         raise ValueError(f"mode must be 'blockout' or 'text', got {mode!r}")
     work = work_dir_for(out)
     work.mkdir(parents=True, exist_ok=True)
-    dur = min(scene_edited.clip.duration_s, _seconds(duration))
+    full = scene_edited.clip.duration_s
+    want = full if duration is None else min(full, _seconds(duration))
+    if mode == "blockout":
+        out_len = min(want, OMNI_EDIT_MAX_S)
+    else:
+        out_len = float(max(TEXT_MIN_S, min(TEXT_MAX_S, round(want))))
+    time_scale = want / out_len
+    if time_scale > 1.001:
+        log.warning(
+            "re-shoot: %.1f s shot played %.2fx faster to fit Omni's %.0f s", want, time_scale, out_len
+        )
     refs = reference_images(Path(clip), scene_orig, work / "refs", max_refs=MAX_REFS)
     ref_bytes = [r.read_bytes() for r in refs]
+    directed = direction is not None
+    beats = [] if directed else performance_beats(Path(clip), scene_orig)  # S14 director covers it
+    orig_hfov = scene_orig.camera.hfov_deg
     suffix = f"\n(Alternative take {take + 1}.)" if take else ""
     raw = work / "raw.mp4"
     if mode == "blockout":
         colors = blockout_palette(scene_edited)
-        guide = render_blockout(scene_edited, work / "blockout.mp4", t1=dur, colors=colors)
-        prompt = edit_prompt(scene_edited, colors, dur) + suffix
+        guide = render_blockout(
+            scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale
+        )
+        base = edit_prompt(
+            scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
+            directed=directed,
+        )  # fmt: skip
+        prompt = _directed(base, direction) + suffix
         generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
     else:
-        prompt = describe_shot(scene_edited, dur, polish=polish) + suffix
-        generate_video(ref_bytes, prompt, raw, duration=f"{round(dur):d}s", resolution=resolution)
+        base = describe_shot(
+            scene_edited, want, polish=polish, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
+            directed=directed,
+        )  # fmt: skip
+        prompt = _directed(base, direction) + suffix
+        generate_video(ref_bytes, prompt, raw, duration=f"{round(out_len):d}s", resolution=resolution)
     out = burn_label(raw, Path(out))
     meta = {
         "label": AI_LABEL,
         "model": load_config().MODEL_RESHOOT,
         "mode": mode,
         "take": take,
-        "duration_s": dur,
+        "directed": directed,
+        "source_duration_s": full,
+        "shot_duration_s": round(want, 3),
+        "duration_s": round(out_len, 3),
+        "time_scale": round(time_scale, 4),
         "resolution": resolution,
+        "beats": beats,
         "prompt": prompt,
         "refs": [str(r) for r in refs],
         "raw": str(raw),
@@ -734,6 +931,15 @@ def reshoot(
     return out
 
 
+def _directed(prompt: str, direction: Any | None) -> str:
+    """S14 (opt-in): geometric prompt + director's notes. `direction`: `direct.Pack` or (brief, dir)."""
+    if direction is None:
+        return prompt
+    from godshot import direct  # S14 (lazy: direct imports shot_facts from here)
+
+    return direct.compose(prompt, direction)
+
+
 def reshoot_best(
     clip: Path,
     scene_orig: SceneV1,
@@ -741,30 +947,117 @@ def reshoot_best(
     out_dir: Path,
     n: int = 3,
     workers: int = 3,
+    direct: bool = False,
+    score_preservation: bool = False,
+    w_preserve: float = 0.4,
+    request: str = "",
+    critic_rounds: int = 0,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Generate `n` takes in parallel, score each with `conformance` vs the edited map, keep the best.
 
-    Writes out_dir/reshoot_best.mp4 (labelled) + reshoot_best.json; returns that summary.
+    S14 (opt-in; `request` or `critic_rounds` imply `direct`):
+    - `direct=True`: scene analyst → edit interpreter (map diff + free-text `request`) → director, once
+      (out_dir/direct/*.json); every take uses the directed prompt.
+    - each take also gets preservation (LOCKED must-preserve items still visible) and, with a request,
+      fulfilment (the requested changes happened); takes rank by (1 - w)·conformance + w·mean(scene scores).
+    - `critic_rounds` > 0: the critic watches the best take; on "revise" one corrected take is generated and
+      scored, up to that many rounds (out_dir/direct/critique_<r>.json).
+    - `score_preservation=True` without `direct`: plain S12 takes, scored for preservation (for A/B).
+    A take whose Omni call fails is retried once. Writes out_dir/reshoot_best.mp4 (labelled) + .json.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     out_dir = Path(out_dir)
+    direct = direct or bool(request.strip()) or critic_rounds > 0
+    pack = brief = spec = None
+    if direct or score_preservation:
+        from godshot import direct as direct_mod  # S14
 
-    def one(k: int) -> dict[str, Any]:
-        path = reshoot(clip, scene_orig, scene_edited, out_dir / f"take_{k + 1}.mp4", take=k, **kwargs)
-        raw = (
-            work_dir_for(path) / "raw.mp4"
-        )  # score the UNLABELLED video (the badge could confuse the verifier)
+        cap = kwargs.get("duration")
+        dur = (
+            scene_edited.clip.duration_s if cap is None else min(scene_edited.clip.duration_s, _seconds(cap))
+        )
+        if direct:
+            pack = direct_mod.prepare(clip, scene_orig, scene_edited, out_dir, duration_s=dur,
+                                      request=request)  # fmt: skip
+            brief, spec = pack.brief, pack.spec
+        else:
+            brief = direct_mod.analyze_scene(clip, scene_orig)
+
+    def make(k: int, take_pack: Any) -> Path:
+        out = out_dir / f"take_{k + 1}.mp4"
+        try:
+            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+        except OmniError as e:  # generic INVALID_ARGUMENT, more often on long prompts: retry once, compact
+            log.warning("take %d failed (%s); retrying once with a compact prompt", k + 1, e)
+            if take_pack is not None:
+                from dataclasses import replace
+
+                from godshot import direct as direct_mod  # S14
+
+                take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
+            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+
+    def score(k: int, path: Path) -> dict[str, Any]:
+        # score the UNLABELLED video (the badge could confuse the verifier)
+        raw = work_dir_for(path) / "raw.mp4"
         conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
-        return {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
-                "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
+               "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        if brief is not None:
+            from godshot import direct as direct_mod  # S14
+
+            work = work_dir_for(path)
+            pres = direct_mod.preservation(raw, brief, work_dir=work / "preservation", spec=spec)
+            ful = direct_mod.fulfilment(raw, spec, work_dir=work / "fulfilment") if spec is not None else None
+            row |= {
+                "preservation": pres["score"], "kept": f"{pres['kept']}/{pres['n']}",
+                "fulfilment": ful["score"] if ful else None,
+                "done": f"{ful['kept']}/{ful['n']}" if ful else None,
+                "combined": direct_mod.combined_score(conf["score"], pres["score"], w_preserve,
+                                                      ful["score"] if ful else None),
+                "preservation_items": pres["items"], "fulfilment_items": ful["items"] if ful else [],
+                "_pres": pres, "_ful": ful,
+            }  # fmt: skip
+        return row
+
+    def rank(r: dict[str, Any]) -> tuple[float, int]:
+        return (r.get("combined", r["score"]), r["usable"])
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
-        takes = list(pool.map(one, range(n)))
-    best = max(takes, key=lambda r: (r["score"], r["usable"]))
+        takes = list(pool.map(lambda k: score(k, make(k, pack)), range(n)))
+
+    critiques = []
+    if pack is not None and critic_rounds > 0:
+        from dataclasses import replace
+
+        from godshot import direct as direct_mod  # S14
+
+        corrections: list[str] = []
+        for r in range(critic_rounds):
+            best = max(takes, key=rank)
+            crit = direct_mod.critique(
+                Path(best["video"]),
+                replace(pack, corrections=list(corrections)),
+                direct_mod.score_summary(best["conformance"], best.get("_pres"), best.get("_ful")),
+            )
+            (out_dir / "direct").mkdir(parents=True, exist_ok=True)
+            (out_dir / "direct" / f"critique_{r + 1}.json").write_text(
+                json.dumps({"take": best["take"], **crit.model_dump()}, indent=2) + "\n", encoding="utf-8"
+            )
+            critiques.append({"round": r + 1, "on_take": best["take"], "verdict": crit.verdict,
+                              "issues": [i.model_dump() for i in crit.issues]})  # fmt: skip
+            if crit.verdict == "accept" or not crit.corrections.strip():
+                break
+            corrections.append(crit.corrections.strip())
+            k = n + r
+            takes.append(score(k, make(k, replace(pack, corrections=list(corrections)))))
+
+    best = max(takes, key=rank)
     final = out_dir / "reshoot_best.mp4"
     shutil.copyfile(best["video"], final)
+    hidden = ("conformance", "preservation_items", "fulfilment_items", "_pres", "_ful")
     summary = {
         "label": AI_LABEL,
         "video": str(final),
@@ -772,9 +1065,15 @@ def reshoot_best(
         "score": best["score"],
         "hits": best["hits"],
         "usable": best["usable"],
-        "takes": [{k: v for k, v in r.items() if k != "conformance"} for r in takes],
+        "takes": [{k: v for k, v in r.items() if k not in hidden} for r in takes],
         "checks": best["conformance"]["checks"],
     }
+    if brief is not None:  # S14
+        summary |= {"directed": direct, "request": request, "preservation": best["preservation"],
+                    "kept": best["kept"], "fulfilment": best.get("fulfilment"), "done": best.get("done"),
+                    "combined": best["combined"], "w_preserve": w_preserve,
+                    "preservation_items": best["preservation_items"],
+                    "fulfilment_items": best.get("fulfilment_items", []), "critiques": critiques}  # fmt: skip
     (out_dir / "reshoot_best.json").write_text(
         json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
     )
