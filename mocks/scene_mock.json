@@ -1,0 +1,288 @@
+{
+  "schema": "scene.v1",
+  "clip": {
+    "id": "mock_001",
+    "duration_s": 10.0,
+    "fps": 24.0,
+    "width": 1280,
+    "height": 720
+  },
+  "room": {
+    "outline": [
+      [
+        -4.0,
+        0.0
+      ],
+      [
+        4.0,
+        0.0
+      ],
+      [
+        4.0,
+        9.0
+      ],
+      [
+        -4.0,
+        9.0
+      ]
+    ],
+    "notes": "rectangular room; door on the left wall, window on the far wall",
+    "confidence": 0.6
+  },
+  "objects": [
+    {
+      "id": "door_1",
+      "type": "door",
+      "visual_description": "the green wooden door",
+      "shape": "rect",
+      "center": [
+        -4.0,
+        6.0
+      ],
+      "size": [
+        0.2,
+        1.4
+      ],
+      "rotation_deg": 0.0,
+      "color": "#2e7d32",
+      "confidence": 0.7
+    },
+    {
+      "id": "table_1",
+      "type": "table",
+      "visual_description": "the round white dining table",
+      "shape": "circle",
+      "center": [
+        0.5,
+        5.0
+      ],
+      "size": [
+        1.2,
+        1.2
+      ],
+      "rotation_deg": 0.0,
+      "color": "#eeeeee",
+      "confidence": 0.8
+    },
+    {
+      "id": "window_1",
+      "type": "window",
+      "visual_description": "the tall window with white curtains",
+      "shape": "rect",
+      "center": [
+        1.5,
+        9.0
+      ],
+      "size": [
+        1.6,
+        0.2
+      ],
+      "rotation_deg": 0.0,
+      "color": "#90caf9",
+      "confidence": 0.6
+    }
+  ],
+  "actors": [
+    {
+      "id": "a1",
+      "visual_description": "the man in the red hoodie",
+      "color": "#e74c3c",
+      "track": [
+        {
+          "t": 0.0,
+          "mmss": "00:00.000",
+          "x": -2.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 1.0,
+          "mmss": "00:01.000",
+          "x": -2.0,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 2.0,
+          "mmss": "00:02.000",
+          "x": -1.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 3.0,
+          "mmss": "00:03.000",
+          "x": -1.0,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 4.0,
+          "mmss": "00:04.000",
+          "x": -0.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 5.0,
+          "mmss": "00:05.000",
+          "x": 0.0,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 6.0,
+          "mmss": "00:06.000",
+          "x": 0.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 7.0,
+          "mmss": "00:07.000",
+          "x": 1.0,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 8.0,
+          "mmss": "00:08.000",
+          "x": 1.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 9.0,
+          "mmss": "00:09.000",
+          "x": 2.0,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        },
+        {
+          "t": 10.0,
+          "mmss": "00:10.000",
+          "x": 2.5,
+          "y": 6.5,
+          "facing_deg": 270.0,
+          "visible": true
+        }
+      ],
+      "confidence": 0.75
+    }
+  ],
+  "camera": {
+    "hfov_deg": 60.0,
+    "track": [
+      {
+        "t": 0.0,
+        "mmss": "00:00.000",
+        "x": 0.0,
+        "y": 0.0,
+        "yaw_deg": 0.0
+      },
+      {
+        "t": 1.0,
+        "mmss": "00:01.000",
+        "x": 0.0,
+        "y": 0.5,
+        "yaw_deg": 0.0
+      },
+      {
+        "t": 2.0,
+        "mmss": "00:02.000",
+        "x": 0.0,
+        "y": 1.0,
+        "yaw_deg": 0.0
+      },
+      {
+        "t": 3.0,
+        "mmss": "00:03.000",
+        "x": 0.0,
+        "y": 1.5,
+        "yaw_deg": 0.0
+      },
+      {
+        "t": 4.0,
+        "mmss": "00:04.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 0.0
+      },
+      {
+        "t": 5.0,
+        "mmss": "00:05.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 10.0
+      },
+      {
+        "t": 6.0,
+        "mmss": "00:06.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 20.0
+      },
+      {
+        "t": 7.0,
+        "mmss": "00:07.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 30.0
+      },
+      {
+        "t": 8.0,
+        "mmss": "00:08.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 40.0
+      },
+      {
+        "t": 9.0,
+        "mmss": "00:09.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 40.0
+      },
+      {
+        "t": 10.0,
+        "mmss": "00:10.000",
+        "x": 0.0,
+        "y": 2.0,
+        "yaw_deg": 40.0
+      }
+    ],
+    "motion_segments": [
+      {
+        "t0": 0.0,
+        "t1": 4.0,
+        "translation": "dolly_in",
+        "rotation": "none"
+      },
+      {
+        "t0": 4.0,
+        "t1": 8.0,
+        "translation": "static",
+        "rotation": "pan_left"
+      },
+      {
+        "t0": 8.0,
+        "t1": 10.0,
+        "translation": "static",
+        "rotation": "none"
+      }
+    ],
+    "confidence": 0.7
+  },
+  "low_confidence": [],
+  "model_notes": "Hand-written mock: camera dollies toward the table, pans left toward the door, then holds."
+}

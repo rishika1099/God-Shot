@@ -1,6 +1,6 @@
 """Loop controller: extract → (checks → verify → correct)×≤3, keep-if-better. Used by CLI + web.
 
-Spec: S06 (.claude/specs/S06*.md) — owner: Prajesh.
+Spec: S06 (.claude/specs/S06*.md) — owner: Rishika.
 Implement per the spec; keep signatures in sync with it.
 """
 

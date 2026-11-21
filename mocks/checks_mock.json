@@ -1,0 +1,426 @@
+[
+  {
+    "check_id": "2f76c12c",
+    "template": "VISIBLE",
+    "t": 1.0,
+    "mmss": "00:01.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/001000.jpg"
+      ]
+    },
+    "entities": [
+      "table_1"
+    ],
+    "expected": true,
+    "margin": 23.7,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the round white dining table visible, even partly, anywhere in the image?",
+      "criteria": {
+        "true_description": "The table is at least partly visible in the frame.",
+        "false_description": "The table does not appear in the frame."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.96,
+      "choice_probs": null,
+      "confidence": 0.96,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "4ddd0aca",
+    "template": "SIDE_LEFT",
+    "t": 1.0,
+    "mmss": "00:01.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/001000.jpg"
+      ]
+    },
+    "entities": [
+      "a1"
+    ],
+    "expected": true,
+    "margin": 18.4,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the man in the red hoodie in the LEFT half of the image?",
+      "criteria": {
+        "true_description": "The man is visible and his center is left of the vertical midline.",
+        "false_description": "The man is not visible, or he is in the right half."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.91,
+      "choice_probs": null,
+      "confidence": 0.91,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "03b23bc3",
+    "template": "SIDE_RIGHT",
+    "t": 1.0,
+    "mmss": "00:01.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/001000.jpg"
+      ]
+    },
+    "entities": [
+      "a1"
+    ],
+    "expected": false,
+    "margin": 18.4,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the man in the red hoodie in the RIGHT half of the image?",
+      "criteria": {
+        "true_description": "The man is visible and his center is right of the vertical midline.",
+        "false_description": "The man is not visible, or he is in the left half."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.08,
+      "choice_probs": null,
+      "confidence": 0.92,
+      "verdict": "pass"
+    },
+    "control": true
+  },
+  {
+    "check_id": "e8055a90",
+    "template": "A_LEFT_OF_B",
+    "t": 1.0,
+    "mmss": "00:01.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/001000.jpg"
+      ]
+    },
+    "entities": [
+      "a1",
+      "table_1"
+    ],
+    "expected": true,
+    "margin": 24.8,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. In this image, is the man in the red hoodie further to the left than the round white dining table?",
+      "criteria": {
+        "true_description": "Both are visible and the man is further left in the image than the table.",
+        "false_description": "Either is not visible, or the man is further right than the table."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.88,
+      "choice_probs": null,
+      "confidence": 0.88,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "f7d62a64",
+    "template": "CLOSER",
+    "t": 2.0,
+    "mmss": "00:02.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/002000.jpg"
+      ]
+    },
+    "entities": [
+      "table_1",
+      "window_1"
+    ],
+    "expected": "a_first",
+    "margin": 2.0,
+    "question": {
+      "type": "choice",
+      "instructions": "Look at this single film frame. Which of these is closer to the camera in this frame: the round white dining table or the tall window with white curtains?",
+      "criteria": null,
+      "options": {
+        "a_first": "The round white dining table is closer to the camera.",
+        "b_second": "The tall window with white curtains is closer to the camera.",
+        "other": "One or both are not visible, or it is impossible to tell."
+      }
+    },
+    "result": {
+      "p_yes": null,
+      "choice_probs": {
+        "a_first": 0.82,
+        "b_second": 0.11,
+        "other": 0.07
+      },
+      "confidence": 0.82,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "5444abbb",
+    "template": "NOT_VISIBLE",
+    "t": 3.0,
+    "mmss": "00:03.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/003000.jpg"
+      ]
+    },
+    "entities": [
+      "door_1"
+    ],
+    "expected": false,
+    "margin": 11.6,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the green wooden door visible, even partly, anywhere in the image?",
+      "criteria": {
+        "true_description": "The door is at least partly visible in the frame.",
+        "false_description": "The door does not appear in the frame."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.86,
+      "choice_probs": null,
+      "confidence": 0.86,
+      "verdict": "fail"
+    },
+    "control": false
+  },
+  {
+    "check_id": "743ce139",
+    "template": "SIDE_RIGHT",
+    "t": 5.0,
+    "mmss": "00:05.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/005000.jpg"
+      ]
+    },
+    "entities": [
+      "a1"
+    ],
+    "expected": true,
+    "margin": 10.0,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the man in the red hoodie in the RIGHT half of the image?",
+      "criteria": {
+        "true_description": "The man is visible and his center is right of the vertical midline.",
+        "false_description": "The man is not visible, or he is in the left half."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.18,
+      "choice_probs": null,
+      "confidence": 0.82,
+      "verdict": "fail"
+    },
+    "control": false
+  },
+  {
+    "check_id": "fcfa3cfd",
+    "template": "VISIBLE",
+    "t": 8.0,
+    "mmss": "00:08.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/008000.jpg"
+      ]
+    },
+    "entities": [
+      "door_1"
+    ],
+    "expected": true,
+    "margin": 25.0,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the green wooden door visible, even partly, anywhere in the image?",
+      "criteria": {
+        "true_description": "The door is at least partly visible in the frame.",
+        "false_description": "The door does not appear in the frame."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.93,
+      "choice_probs": null,
+      "confidence": 0.93,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "81fdc7b0",
+    "template": "NOT_VISIBLE",
+    "t": 9.0,
+    "mmss": "00:09.000",
+    "t_end": null,
+    "input_ref": {
+      "kind": "frame",
+      "paths": [
+        "frames/mock_001/009000.jpg"
+      ]
+    },
+    "entities": [
+      "window_1"
+    ],
+    "expected": false,
+    "margin": 22.1,
+    "question": {
+      "type": "noul",
+      "instructions": "Look at this single film frame. Is the tall window with white curtains visible, even partly, anywhere in the image?",
+      "criteria": {
+        "true_description": "The window is at least partly visible in the frame.",
+        "false_description": "The window does not appear in the frame."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.41,
+      "choice_probs": null,
+      "confidence": 0.59,
+      "verdict": "uncertain"
+    },
+    "control": false
+  },
+  {
+    "check_id": "0eafdf86",
+    "template": "TOWARD",
+    "t": 0.0,
+    "mmss": "00:00.000",
+    "t_end": 4.0,
+    "input_ref": {
+      "kind": "pair",
+      "paths": [
+        "frames/mock_001/000000.jpg",
+        "frames/mock_001/004000.jpg"
+      ]
+    },
+    "entities": [
+      "a1"
+    ],
+    "expected": true,
+    "margin": 35.0,
+    "question": {
+      "type": "noul",
+      "instructions": "Image 1 is at 00:00.000, Image 2 is at 00:04.000, same shot. Did the man in the red hoodie get closer to the camera between Image 1 and Image 2?",
+      "criteria": {
+        "true_description": "The man appears larger or nearer to the camera in Image 2 than in Image 1.",
+        "false_description": "The man appears the same distance or further away in Image 2."
+      },
+      "options": null
+    },
+    "result": {
+      "p_yes": 0.84,
+      "choice_probs": null,
+      "confidence": 0.84,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "bdd98bbe",
+    "template": "DOLLY",
+    "t": 0.0,
+    "mmss": "00:00.000",
+    "t_end": 4.0,
+    "input_ref": {
+      "kind": "pair",
+      "paths": [
+        "frames/mock_001/000000.jpg",
+        "frames/mock_001/004000.jpg"
+      ]
+    },
+    "entities": [],
+    "expected": "dolly_in",
+    "margin": 2.0,
+    "question": {
+      "type": "choice",
+      "instructions": "Image 1 is at 00:00.000, Image 2 is at 00:04.000, same continuous shot. Did the camera physically move toward or away from the scene?",
+      "criteria": null,
+      "options": {
+        "dolly_in": "The camera moved forward, toward the scene.",
+        "dolly_out": "The camera moved backward, away from the scene.",
+        "other": "The camera did not move forward or backward, or it is impossible to tell."
+      }
+    },
+    "result": {
+      "p_yes": null,
+      "choice_probs": {
+        "dolly_in": 0.79,
+        "dolly_out": 0.06,
+        "other": 0.15
+      },
+      "confidence": 0.79,
+      "verdict": "pass"
+    },
+    "control": false
+  },
+  {
+    "check_id": "44e5f324",
+    "template": "PAN",
+    "t": 4.0,
+    "mmss": "00:04.000",
+    "t_end": 8.0,
+    "input_ref": {
+      "kind": "pair",
+      "paths": [
+        "frames/mock_001/004000.jpg",
+        "frames/mock_001/008000.jpg"
+      ]
+    },
+    "entities": [],
+    "expected": "pan_left",
+    "margin": 40.0,
+    "question": {
+      "type": "choice",
+      "instructions": "Image 1 is at 00:04.000, Image 2 is at 00:08.000, same continuous shot. How did the camera rotate between them?",
+      "criteria": null,
+      "options": {
+        "other": "The camera did not rotate left or right, or it is impossible to tell.",
+        "pan_left": "The camera turned to its left, so the scene slides to the right in the image.",
+        "pan_right": "The camera turned to its right, so the scene slides to the left in the image."
+      }
+    },
+    "result": {
+      "p_yes": null,
+      "choice_probs": {
+        "other": 0.09,
+        "pan_left": 0.85,
+        "pan_right": 0.06
+      },
+      "confidence": 0.85,
+      "verdict": "pass"
+    },
+    "control": false
+  }
+]

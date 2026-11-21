@@ -1,6 +1,6 @@
 """Apply map edits (drag/presets) or a text instruction (Hydrogen) to a scene.
 
-Spec: S09 (.claude/specs/S09*.md) — owner: Akash.
+Spec: S09 (.claude/specs/S09*.md) — owner: Siva.
 Implement per the spec; keep signatures in sync with it.
 """
 

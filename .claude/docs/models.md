@@ -11,6 +11,13 @@ All IDs are read from `.env` through `godshot/config.py`. **VERIFY each ID with 
 | Re-shoot | S12 | `gemini-omni-1.2-flash` (`GODSHOT_MODEL_RESHOOT`) via Interactions API | `response_format={"type":"video","duration":"5s"–"8s","resolution":"360p"→"720p","aspect_ratio":"16:9"}`, ≤6 reference images | Video generation from references + text |
 | Stylized room background (stretch) | S07 | image model (`GODSHOT_MODEL_IMAGE`, set when verified) | one image per clip | Pretty background layer under the map |
 
+## Verified so far (2026-11-21, S00)
+- SDK: `google-genai==3.6.1` (requirements pin `>=3.6`). `Client` exposes `decisions`, `interactions`, `models`, `files`.
+- Decisions wire format: noul = `{"type":"noul","instructions":str,"criteria":{"true_description","false_description"}}`; choice = `{"type":"choice","instructions":str,"criteria":{key: description}}` (2–255 options). Our `check.v1` keeps `options` and `Question.to_api()` maps it to `criteria`.
+- Decisions answers: noul → `noul` (our `p_yes`), choice → `probabilities` (our `choice_probs`) + `choice`; both carry `confidence`. Also a `score` question type exists (unused).
+- `types.ThinkingConfig(thinking_level=...)` accepts `MINIMAL | LOW | MEDIUM | HIGH | XHIGH`.
+- **Model IDs: NOT yet verified** (no API key on the S00 machine). Run `python -m godshot smoke` with the team `.env`; it prints every model ID containing `gemini-4`, `decision` or `omni`. Paste the list here and fix `.env.example` if any ID differs.
+
 ## Notes and gotchas (from our research; verify)
 - Gemini 4: sampling params (temperature/top_p) are reportedly ignored. Control output with `thinking_level` + schema.
 - Upload the clip ONCE via the Files API and reuse the URI for baseline, loop and corrections.
@@ -38,12 +45,14 @@ resp = client.models.generate_content(
         response_json_schema=SceneV1.model_json_schema(),
         thinking_config=types.ThinkingConfig(thinking_level="MEDIUM")))
 
-# Verification
+# Verification (field names VERIFIED against google-genai 3.6.1 source, 2026-11-21)
 res = client.decisions.create(
-    model=cfg.MODEL_VERIFY,
+    model=f"models/{cfg.MODEL_VERIFY}",                      # SDK docstring: format `models/{model}`
     input=[{"type": "text", "text": "A single frame from a film shot at 00:02.000."},
-           {"type": "image", "mime_type": "image/jpeg", "data": b64}],   # VERIFY block shape
-    questions={c.check_id: c.question.model_dump() for c in frame_checks})
+           {"type": "image", "mime_type": "image/jpeg", "data": b64}],   # verified block shape
+    questions={str(i): c.question.to_api() for i, c in enumerate(frame_checks)})  # keys are opaque to the model
+ans = res.answers["0"]          # NoulAnswer: .noul = P(true) in [0.01, 0.99], .confidence = max(noul, 1-noul)
+                                # ChoiceAnswer: .choice (top key), .probabilities {key: p}, .confidence
 
 # Re-shoot
 it = client.interactions.create(model=cfg.MODEL_RESHOOT, input=[...],

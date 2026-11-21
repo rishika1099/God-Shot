@@ -1,6 +1,6 @@
 """Argon: clip → scene.v1. Round 0 of the loop == the eval BASELINE.
 
-Spec: S02 (.claude/specs/S02*.md) — owner: Prajesh.
+Spec: S02 (.claude/specs/S02*.md) — owner: Akash.
 Implement per the spec; keep signatures in sync with it.
 """
 

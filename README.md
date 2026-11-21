@@ -60,12 +60,14 @@ Every piece of work is a spec in [`.claude/specs/`](.claude/specs/). Each has an
 
 | Owner | Area | Specs |
 |---|---|---|
-| **Prajesh** | Gemini extraction, correction loop, Omni re-shoot | S00, S01, S02, S06, S12 |
-| **Siva** | Geometry, checks, Decisions verifier, scoring | S03, S04, S05, S11 |
-| **Akash** | Map renderer, reel, web UI, map editor | S07, S08, S09 |
-| **Rishika** | Eval data + labels, metrics, charts, pitch | S10, S13 |
+| **Prajesh** | Foundation, ingest, Omni re-shoot (incl. spike + UI button) | S00, S01, S12 |
+| **Siva** | Geometry, Decisions verifier, web UI + map editor, scoring | S03, S05, S09, S11 |
+| **Akash** | Gemini extraction (baseline), map renderer, reel | S02, S07, S08 |
+| **Rishika** | Checks, correction loop, eval data + labels, charts, pitch | S04, S06, S10, S13 |
 
 Status board: [`.claude/specs/00-index.md`](.claude/specs/00-index.md)
+
+**Git:** one branch per spec (`<owner>/<spec>-<slug>`, e.g. `siva/s05-verify`), stacked on your own branches when needed. Never push to `main`. One PR per spec; PRs are reviewed and approved together by the group at each sync, then merged. Full rules: [CLAUDE.md → Git workflow](CLAUDE.md#git-workflow-own-branches-group-approved-prs).
 
 ## Data and licenses
 

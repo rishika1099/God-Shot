@@ -1,12 +1,41 @@
 """Load .env and expose model IDs + pipeline settings. The ONLY place model IDs live.
 
 Spec: S00 (.claude/specs/S00*.md) — owner: Prajesh.
-Implement per the spec; keep signatures in sync with it.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from google import genai
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Defaults mirror .env.example. VERIFY: model IDs confirmed via `python -m godshot smoke`.
+_DEFAULTS: dict[str, str] = {
+    "GODSHOT_MODEL_EXTRACT": "gemini-4-argon",
+    "GODSHOT_MODEL_CORRECT": "gemini-4-argon",
+    "GODSHOT_MODEL_CHEAP": "gemini-4-hydrogen",
+    "GODSHOT_MODEL_VERIFY": "gemini-decision-1",
+    "GODSHOT_MODEL_RESHOOT": "gemini-omni-1.2-flash",
+    "GODSHOT_MODEL_IMAGE": "",
+    "GODSHOT_FPS": "4",
+    "GODSHOT_MAX_ROUNDS": "3",
+    "GODSHOT_PASS_THRESHOLD": "0.7",
+    "GODSHOT_FAIL_THRESHOLD": "0.3",
+    "GODSHOT_CACHE_DIR": ".cache",
+}
+
+
+class ConfigError(RuntimeError):
+    """Raised when required configuration (e.g. the API key) is missing."""
 
 
 @dataclass(frozen=True)
@@ -24,11 +53,48 @@ class Config:
     FAIL_THRESHOLD: float
     CACHE_DIR: str
 
+    def __repr__(self) -> str:  # never leak the key into logs
+        fields = {k: v for k, v in self.__dict__.items() if k != "API_KEY"}
+        return f"Config(API_KEY=<{'set' if self.API_KEY else 'missing'}>, {fields})"
 
-def load_config() -> Config:
-    raise NotImplementedError
+
+def _env(name: str) -> str:
+    return os.environ.get(name, _DEFAULTS.get(name, "")).strip()
 
 
-def get_client():
-    """genai.Client(http_options={"api_version": "v1beta"})."""
-    raise NotImplementedError
+def _resolve_cache_dir(raw: str) -> str:
+    p = Path(raw)
+    return str(p if p.is_absolute() else REPO_ROOT / p)
+
+
+@lru_cache(maxsize=2)
+def load_config(require_key: bool = False) -> Config:
+    """Read `.env` (repo root) + process env. Set `require_key=True` before any API call."""
+    load_dotenv(REPO_ROOT / ".env", override=False)
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
+    if require_key and not api_key:
+        raise ConfigError(
+            "GEMINI_API_KEY is not set. Copy .env.example to .env and fill in the key (never commit .env)."
+        )
+    return Config(
+        API_KEY=api_key,
+        MODEL_EXTRACT=_env("GODSHOT_MODEL_EXTRACT"),
+        MODEL_CORRECT=_env("GODSHOT_MODEL_CORRECT"),
+        MODEL_CHEAP=_env("GODSHOT_MODEL_CHEAP"),
+        MODEL_VERIFY=_env("GODSHOT_MODEL_VERIFY"),
+        MODEL_RESHOOT=_env("GODSHOT_MODEL_RESHOOT"),
+        MODEL_IMAGE=_env("GODSHOT_MODEL_IMAGE"),
+        FPS=int(_env("GODSHOT_FPS")),
+        MAX_ROUNDS=int(_env("GODSHOT_MAX_ROUNDS")),
+        PASS_THRESHOLD=float(_env("GODSHOT_PASS_THRESHOLD")),
+        FAIL_THRESHOLD=float(_env("GODSHOT_FAIL_THRESHOLD")),
+        CACHE_DIR=_resolve_cache_dir(_env("GODSHOT_CACHE_DIR")),
+    )
+
+
+def get_client() -> genai.Client:
+    """genai.Client on v1beta (needed for the Decisions API). Raises ConfigError without a key."""
+    from google import genai
+
+    cfg = load_config(require_key=True)
+    return genai.Client(api_key=cfg.API_KEY, http_options={"api_version": "v1beta"})

@@ -1,6 +1,6 @@
 """scene.v1 → check.v1 list from geometry templates (code-generated, never LLM).
 
-Spec: S04 (.claude/specs/S04*.md) — owner: Siva.
+Spec: S04 (.claude/specs/S04*.md) — owner: Rishika.
 Implement per the spec; keep signatures in sync with it.
 """
 

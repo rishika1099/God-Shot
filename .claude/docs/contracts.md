@@ -32,7 +32,7 @@ These are the shared interfaces. Pydantic models live in `godshot/schema.py`. Ad
     "motion_segments": [{"t0": 0.0, "t1": 4.0, "translation": "dolly_in", "rotation": "pan_left"}],
     "confidence": 0.6
   },
-  "low_confidence": [{"entity_id": "door_1", "t0": 2.0, "t1": 4.0, "failed_checks": ["c17"]}],
+  "low_confidence": [{"entity_id": "door_1", "t0": 2.0, "t1": 4.0, "failed_checks": ["2a01f284"]}],
   "model_notes": "short rationale"
 }
 ```
@@ -45,7 +45,7 @@ Rules: keyframes at least every 1 s and at every motion change; IDs stable acros
 ## check.v1 (produced by code in S04, never by an LLM)
 ```json
 {
-  "check_id": "c17", "template": "SIDE_LEFT", "t": 2.0, "mmss": "00:02.000",
+  "check_id": "2a01f284", "template": "SIDE_LEFT", "t": 2.0, "mmss": "00:02.000",
   "t_end": null,
   "input_ref": {"kind": "frame", "paths": ["frames/tos_014/002000.jpg"]},
   "entities": ["door_1"], "expected": true, "margin": 14.2,
@@ -53,12 +53,16 @@ Rules: keyframes at least every 1 s and at every motion change; IDs stable acros
     "instructions": "Look at this single film frame. Is the large wooden double door in the LEFT half of the image?",
     "criteria": {"true_description": "The door is visible and its center is left of the vertical midline.",
                  "false_description": "The door is not visible, or it is in the right half."}},
-  "result": null
+  "result": null,
+  "control": false
 }
 ```
-- `input_ref.kind`: `frame` (1 path) | `pair` (2 paths, motion checks)
-- `question.type`: `noul` | `choice` (with `options: {key: description}`; use `other` as the catch-all)
-- `result` is filled by S05: `{"p_yes": 0.83, "choice_probs": null, "confidence": 0.83, "verdict": "pass|fail|uncertain"}`
+- `check_id` = `sha1(f"{template}|{'+'.join(entities)}|{t:.3f}")[:8]` (`schema.make_check_id`), stable across rounds.
+- `input_ref.kind`: `frame` (1 path) | `pair` (2 paths, motion checks). `input_ref.paths` is a **list** of strings.
+- `question.type`: `noul` | `choice` (with `options: {key: description}`; use `other` as the catch-all). On the wire to the Decisions API, choice options are sent as `criteria: {key: description}` (`Question.to_api()`).
+- `result` holds the RAW verifier answer, filled by S05: `{"p_yes": 0.83, "choice_probs": null, "confidence": 0.83, "verdict": null}`. Raw fields are scene-independent. `verdict` (`pass|fail|uncertain|null`) is **scene-relative**: `compare(predict(scene, check), observed(raw))` for the scene being scored.
+- `control` (optional, default `false`): mirrored opposite-side SIDE check from S04, used to measure yes-bias.
+- **Question key** `qkey(check) = (tuple(input_ref.paths), question.instructions)` (`schema.qkey`). Same frames + same wording = same question = same raw answer. The per-clip question bank and answer cache are keyed by `qkey`. Because instructions embed `visual_description`, ids and visual descriptions are frozen across rounds (S06 enforces this).
 
 Templates: `VISIBLE, NOT_VISIBLE, SIDE_LEFT, SIDE_RIGHT, A_LEFT_OF_B, CLOSER, TOWARD, PAN, DOLLY` (see S04).
 
@@ -86,4 +90,10 @@ Labels are written BEFORE seeing model output. `entity_map` is filled after the 
 - `map.mp4`, `reel.mp4`
 
 ## Change log
-- (none yet)
+- **2026-11-21 (S00, shared question bank fix; additive only, no renames):**
+  - `InputRef.paths` is confirmed as `list[str]` (1 path for `frame`, 2 for `pair`).
+  - `check.v1` gains optional `control: bool = false` (mirrored side checks from S04).
+  - `result` holds RAW answers `{p_yes, choice_probs, confidence}`; `verdict` is now optional (`null` when only raw answers are stored) and scene-relative, computed by S05/S06 as `compare(predict(scene, c), observed(raw))`.
+  - New shared helpers in `godshot/schema.py`: `qkey(check)` (question identity: frame paths + instructions) and `make_check_id(template, entities, t)`.
+  - `check_id` examples now use the hash style (`2a01f284`) instead of `c17`.
+  - `label.v1` `type` also allows `TOWARD` (`t0`, `t1`, `subject`, bool `value`), as S10 already uses it. `source` also allows `spring` and `charge` (eval.md sources).

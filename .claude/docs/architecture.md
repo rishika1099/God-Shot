@@ -24,14 +24,14 @@ clip ─► S01 ingest ─► S02 extract (Argon) ─► scene.json ─► S04 c
 |---|---|---|---|---|
 | S00 | config, schema, cache, CLI, mocks | Prajesh | none | Shared foundation and frozen contracts |
 | S01 | `ingest.py` | Prajesh | Files API | Upload clip once, reuse URI; ffmpeg frames at exact timestamps |
-| S02 | `extract.py` | Prajesh | gemini-4-argon (MEDIUM) | Video → `scene.v1`. Round 0 is the BASELINE |
+| S02 | `extract.py` | Akash | gemini-4-argon (MEDIUM) | Video → `scene.v1`. Round 0 is the BASELINE |
 | S03 | `geometry.py` | Siva | none | Camera pose + point → bearing, visibility, screen-x, distances |
-| S04 | `checks.py` | Siva | none | `scene.v1` → `check.v1` list from templates, with abstain margins |
+| S04 | `checks.py` | Rishika | none | `scene.v1` → `check.v1` list from templates, with abstain margins |
 | S05 | `verify.py` | Siva | gemini-decision-1 | Batch checks per frame/pair → p(yes) → pass/fail/uncertain |
-| S06 | `correct.py` | Prajesh | gemini-4-argon (HIGH) | Failed checks + frames → corrected scene; loop controller |
+| S06 | `correct.py` | Rishika | gemini-4-argon (HIGH) | Failed checks + frames → corrected scene; loop controller |
 | S07 | `render.py` | Akash | none | `scene.v1` → map.mp4 synced to the clip |
 | S08 | `compose.py` | Akash | none | ffmpeg vstack → 1080×1920 reel + end card |
-| S09 | `web/` | Akash | none (calls pipeline) | Upload, run, view, edit map, cached demo mode |
+| S09 | `web/` | Siva | none (calls pipeline) | Upload, run, view, edit map, cached demo mode |
 | S10 | `eval/` data | Rishika | none | CameraBench subset + own clips + human labels |
 | S11 | `eval/score.py` | Siva (+Rishika charts) | gemini-decision-1 (verifier-vs-human only) | Baseline vs loop vs humans, calibration |
 | S12 | `reshoot.py` | Prajesh | gemini-omni-1.2-flash | Edited scene → generated clip → verify against edited scene |

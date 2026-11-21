@@ -1,6 +1,6 @@
 """FastAPI app: run, poll, list cached runs, edit, re-render, re-shoot. No Streamlit.
 
-Spec: S09 (.claude/specs/S09*.md) — owner: Akash.
+Spec: S09 (.claude/specs/S09*.md) — owner: Siva.
 Implement per the spec; keep signatures in sync with it.
 """
 

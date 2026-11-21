@@ -1,6 +1,6 @@
 # S04: Checks (scene.v1 → check.v1)
 
-- **Owner:** Siva
+- **Owner:** Rishika
 - **Status:** todo
 - **Depends on:** S03
 - **Target:** 2:00
@@ -29,14 +29,26 @@ Turn a scene into 20–60 falsifiable yes/no or choice questions, each with an e
 | DOLLY | pair | choice {dolly_in, dolly_out, other} | forward move > 15% of mean scene distance | "...Did the camera physically move toward or away from the scene?" |
 
 - **Mirrored controls:** for 20% of SIDE checks, also emit the opposite-side question (expected=false). Tag with `control: true` (optional field; add it to contracts.md changelog).
-- Stable `check_id`s: `sha1(template, entities, t)[:8]`, so checks can be compared across rounds.
-- Cap ~60 checks per clip; prioritize motion checks, then SIDE, then the rest.
+- Stable `check_id`s: `sha1(template, entities, t)[:8]` via `schema.make_check_id(template, entities, t)`, so checks can be compared across rounds. (SIDE_LEFT and SIDE_RIGHT on the same entity/t get different ids; S06 handles side flips through `predict`, not through ids.)
+- Cap ~60 checks per clip in `make_checks`; prioritize motion checks, then SIDE, then the rest.
 - `frames_needed(checks) -> list[float]` so S01 can extract them up front.
+
+### `predict(scene, check) -> bool | str | None` (shared question bank, see S06)
+- Evaluates ANY check (by `template`, `entities`, `t` / `t_end`, `input_ref.paths`) under ANY scene, using `geometry.py`. The check may have been proposed by a different scene (an earlier round or another candidate).
+- Returns the answer the scene implies: `bool` for noul templates; the option key for choice templates (`a_first` / `b_second`, `pan_left` / `pan_right`, `dolly_in` / `dolly_out`). It never returns `"other"`.
+- Returns `None` ONLY for a true abstention: the scene puts the answer inside that template's abstain margin (table above), or a referenced entity doesn't exist in the scene / isn't visible (`visible=false` or outside hfov where the template requires visibility). For NOT_VISIBLE, "outside hfov + 8°" is a prediction (`False`), not an abstention.
+- No 60-check cap and no priority dropping inside `predict()`; it is a pure function of (scene, check).
+- `make_checks(scene)` stays as is (it proposes new questions), with the invariant `c.expected == predict(scene, c)` for every check it emits. `make_checks` and `predict` must share the same geometry/margin code so they can't drift.
+- Question identity is `schema.qkey(c) = (tuple(c.input_ref.paths), c.question.instructions)` (`paths` is a list; convert to a tuple to hash). Two checks with the same qkey are the same question.
+- Instructions are built only from `visual_description`s (never ids). S06 freezes ids and visual descriptions across rounds, so the same question keeps the same wording, and therefore the same qkey, in every round.
 
 ## Acceptance criteria
 - [ ] On the mock scene: produces 20–60 checks covering every template that applies; expectations match hand-reasoning on 5 spot-checked items.
 - [ ] No check is emitted inside its abstain margin (property test with random poses).
 - [ ] Instructions are full sentences and never mention ids (the Decisions model never sees question keys).
+- [ ] `predict(scene, c) == c.expected` for every `c` in `make_checks(scene)` (mock scene + random poses).
+- [ ] `predict` works on checks from another scene: moving an object across the midline flips the SIDE answer; deleting it or setting `visible=false` returns `None`; moving it into the abstain margin returns `None`; a static camera answers PAN/DOLLY pair checks with `None` (inside margin), not `"other"`.
+- [ ] `qkey` is used for de-duplication: `make_checks` never emits two checks with the same qkey.
 
 ## Notes / changelog
 -

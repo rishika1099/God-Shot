@@ -1,6 +1,6 @@
 # S02: Extract (Argon → scene.v1; this IS the baseline)
 
-- **Owner:** Prajesh
+- **Owner:** Akash
 - **Status:** todo
 - **Depends on:** S00, S01
 - **Target:** 1:45
