@@ -1,7 +1,7 @@
 # S06: Correct + loop controller
 
 - **Owner:** Rishika
-- **Status:** todo
+- **Status:** in progress (code + unit tests done; needs 1 real dev clip run after S01/S02/S05 land)
 - **Depends on:** S02, S05 (build against `mocks/checks_mock.json` until S05 lands)
 - **Models:** `MODEL_CORRECT` = gemini-4-argon, `thinking_level=HIGH`; same video URI + failing frames as high-res image parts; JSON schema enforced
 
@@ -55,16 +55,21 @@ mark_low_confidence(final, still_failing)                 # merge by entity + ti
 - CLI: `python -m godshot run clip.mp4 -o out/<id>` → also calls S07/S08 if available.
 
 ## Acceptance criteria
-- [ ] With fake functions, the loop stops on: no fails / max rounds / no improvement; it never accepts more than 1 regression.
-- [ ] Shared-bank tests in `tests/test_loop.py` (fake verify + fake/real geometry):
-  - [ ] a) a candidate that only moves the wrong object into the abstain zone → REJECTED
-  - [ ] b) a candidate that deletes the wrong object → REJECTED
-  - [ ] c) a candidate that flips the object to the correct side → ACCEPTED
-  - [ ] d) a candidate that fixes 3 checks but breaks 2 previously correct ones → REJECTED
-  - [ ] a candidate that renames an id or rewrites a visual_description gets it restored from prev before scoring
-  - [ ] the bank only grows, and no qkey is verified twice
+- [x] With fake functions, the loop stops on: no fails / max rounds / no improvement; it never accepts more than 1 regression.
+- [x] Shared-bank tests in `tests/test_loop.py` (fake verify + fake/real geometry):
+  - [x] a) a candidate that only moves the wrong object into the abstain zone → REJECTED
+  - [x] b) a candidate that deletes the wrong object → REJECTED
+  - [x] c) a candidate that flips the object to the correct side → ACCEPTED
+  - [x] d) a candidate that fixes 3 checks but breaks 2 previously correct ones → REJECTED
+  - [x] a candidate that renames an id or rewrites a visual_description gets it restored from prev before scoring
+  - [x] the bank only grows, and no qkey is verified twice
 - [ ] On 1 real dev clip: ≥1 round runs; loop_log shows bank_size, usable, score_prev, score_cand, regressions, accepted per round; low_confidence gets filled.
 - [ ] Total runtime for a 10 s clip < 3 min (log it).
 
 ## Notes / changelog
--
+- 2026-11-21: Implemented `godshot/prompts/correct.md`, `godshot/correct.py` (`correct`, `freeze_identity`, `mark_low_confidence`, `build_correction_prompt`), `godshot/pipeline.py` (`run`, `run_loop`, `score_bank`), and `tests/test_loop.py` (34/34 pytest pass, ruff-clean).
+- Stacked on `rishika/s04-checks` (uses `godshot.checks.make_checks`, `predict`, `frames_needed`).
+- Uses `godshot.verify.{observed, compare, attach}` once S05 merges, with spec-matching fallbacks while S05 is unmerged (zero edits to Siva's `verify.py`).
+- `godshot/__main__.py` was not modified to avoid merge conflicts with S00/S02/S11; wire `pipeline.run(Path(clip), Path(o))` into `__main__.py` at M1 sync.
+- 2026-11-21: Hardened `correct.py` (capped attached failing frames to top 6 highest-confidence frames via `MAX_FAILING_FRAMES=6` for latency; added transient 429/503 exponential-backoff retry) and `pipeline.py` (clamped EOF-edge frame timestamps safely so `ffmpeg` never hits EOF; graceful break & artifact save if a later round hits transient API errors). 141/141 pytest pass, ruff-clean against merged S00–S05.
+- Remaining: log final `tos_001.mp4` live dev-clip runtime (currently running).
