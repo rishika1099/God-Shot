@@ -4,7 +4,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 
 | Spec | Title | Owner | Depends on | Status |
 |---|---|---|---|---|
-| S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | in progress (code + tests done; smoke needs team `.env`) |
+| S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | done |
 | S01 | Ingest: upload + frames | Prajesh | S00 | todo |
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | todo |
 | S03 | Geometry: projection math | Siva | S00 | todo |
@@ -23,6 +23,8 @@ Update your row when you start (`in progress`) and finish (`done`).
 - 2026-11-21: S04/S06 reassigned to Rishika; S05 stays with Siva.
 - 2026-11-21: S02 → Akash; S09 → Siva; S12 fully Prajesh (spike + UI button).
 - 2026-11-21: S04/S05/S06 updated: shared question bank. Every scene in a clip is scored on one accumulating bank keyed by `schema.qkey`; S04 adds `predict()`, S05 stores raw answers + `observed()`, S06 has a new acceptance rule. See contracts.md changelog.
+
+- 2026-11-21: S00 done, smoke OK, model IDs verified. **Contracts frozen.**
 
 ## Milestones
 Milestones are reached in order, not at fixed times.
