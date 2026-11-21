@@ -155,8 +155,11 @@ def reshoot(
     mode: str = typer.Option("blockout", "--mode", help="blockout (map-exact guide) | text (fallback)."),
     resolution: str = typer.Option("360p", "--resolution"),
     duration: str = typer.Option("8s", "--duration", help="Max length; the guide is cut to this."),
+    direct: bool = typer.Option(False, "--direct", help="S14: scene analyst + director agents."),
+    preserve: bool = typer.Option(False, "--preserve", help="S14: score preservation without directing."),
+    w_preserve: float = typer.Option(0.4, "--w-preserve", help="S14: weight of preservation in ranking."),
 ) -> None:
-    """Edited map → AI-generated re-shoot + conformance score (S12)."""
+    """Edited map → AI-generated re-shoot + conformance score (S12); --direct adds S14 agents."""
     from pathlib import Path
 
     from godshot.reshoot import reshoot_best
@@ -165,10 +168,14 @@ def reshoot(
     r = reshoot_best(
         Path(clip), SceneV1.load(orig), SceneV1.load(edited), Path(o), n=n,
         mode=mode, resolution=resolution, duration=duration,
+        direct=direct, score_preservation=preserve, w_preserve=w_preserve,
     )  # fmt: skip
     typer.echo(f"{r['label']}: {r['video']}")
     score = f"{r['score']:.2f} ({r['hits']}/{r['usable']})"
     typer.echo(f"conformance vs edited map: {score}, best take {r['best_take']}/{n}")
+    if "preservation" in r:
+        typer.echo(f"preservation of the scene: {r['preservation']:.2f} ({r['kept']} kept), "
+                   f"combined {r['combined']:.2f}")
 
 
 @app.command()

@@ -692,12 +692,15 @@ def reshoot(
     mode: str = "blockout",
     polish: bool = False,
     take: int = 0,
+    direction: tuple[Any, Any] | None = None,
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
     mode="blockout" (default): map-exact grey-box guide + refs → Omni `edit` (motion comes from the map).
     mode="text": refs + the geometry-derived description → Omni image/reference→video (fallback).
     `take` > 0 asks for a different sample of the same request (used by `reshoot_best`).
+    `direction` = (SceneBrief, Direction) from S14 `direct.prepare`: the geometric prompt is kept verbatim and
+    the director's performance notes + must-keep list are appended (S14, Akash; opt-in).
     Artifacts go to `<out stem>_work/` (refs, blockout.mp4, raw.mp4 = unlabelled, reshoot.json).
     """
     if mode not in ("blockout", "text"):
@@ -712,10 +715,10 @@ def reshoot(
     if mode == "blockout":
         colors = blockout_palette(scene_edited)
         guide = render_blockout(scene_edited, work / "blockout.mp4", t1=dur, colors=colors)
-        prompt = edit_prompt(scene_edited, colors, dur) + suffix
+        prompt = _directed(edit_prompt(scene_edited, colors, dur), direction) + suffix
         generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
     else:
-        prompt = describe_shot(scene_edited, dur, polish=polish) + suffix
+        prompt = _directed(describe_shot(scene_edited, dur, polish=polish), direction) + suffix
         generate_video(ref_bytes, prompt, raw, duration=f"{round(dur):d}s", resolution=resolution)
     out = burn_label(raw, Path(out))
     meta = {
@@ -723,6 +726,7 @@ def reshoot(
         "model": load_config().MODEL_RESHOOT,
         "mode": mode,
         "take": take,
+        "directed": direction is not None,
         "duration_s": dur,
         "resolution": resolution,
         "prompt": prompt,
@@ -734,6 +738,15 @@ def reshoot(
     return out
 
 
+def _directed(prompt: str, direction: tuple[Any, Any] | None) -> str:
+    if direction is None:
+        return prompt
+    from godshot import direct  # S14 (lazy: direct imports shot_facts from here)
+
+    brief, dirn = direction
+    return direct.directed_prompt(prompt, brief, dirn)
+
+
 def reshoot_best(
     clip: Path,
     scene_orig: SceneV1,
@@ -741,28 +754,53 @@ def reshoot_best(
     out_dir: Path,
     n: int = 3,
     workers: int = 3,
+    direct: bool = False,
+    score_preservation: bool = False,
+    w_preserve: float = 0.4,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Generate `n` takes in parallel, score each with `conformance` vs the edited map, keep the best.
 
+    S14 (opt-in): `direct=True` runs the scene analyst + director once (out_dir/direct/*.json) and every take
+    uses the directed prompt. With `direct` or `score_preservation`, each take also gets a preservation score
+    (must-preserve elements still visible) and takes are ranked by (1 - w)·conformance + w·preservation.
     Writes out_dir/reshoot_best.mp4 (labelled) + reshoot_best.json; returns that summary.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     out_dir = Path(out_dir)
+    brief = direction = None
+    if direct or score_preservation:
+        from godshot import direct as direct_mod  # S14
+
+        dur = min(scene_edited.clip.duration_s, _seconds(kwargs.get("duration", "8s")))
+        if direct:
+            brief, dirn = direct_mod.prepare(clip, scene_orig, scene_edited, out_dir, duration_s=dur)
+            direction = (brief, dirn)
+        else:
+            brief = direct_mod.analyze_scene(clip, scene_orig)
 
     def one(k: int) -> dict[str, Any]:
-        path = reshoot(clip, scene_orig, scene_edited, out_dir / f"take_{k + 1}.mp4", take=k, **kwargs)
+        path = reshoot(clip, scene_orig, scene_edited, out_dir / f"take_{k + 1}.mp4", take=k,
+                       direction=direction, **kwargs)  # fmt: skip
         raw = (
             work_dir_for(path) / "raw.mp4"
         )  # score the UNLABELLED video (the badge could confuse the verifier)
         conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
-        return {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
-                "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
+               "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        if brief is not None:
+            from godshot import direct as direct_mod  # S14
+
+            pres = direct_mod.preservation(raw, brief, work_dir=work_dir_for(path) / "preservation")
+            row |= {"preservation": pres["score"], "kept": f"{pres['kept']}/{pres['n']}",
+                    "combined": direct_mod.combined_score(conf["score"], pres["score"], w_preserve),
+                    "preservation_items": pres["items"]}  # fmt: skip
+        return row
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
         takes = list(pool.map(one, range(n)))
-    best = max(takes, key=lambda r: (r["score"], r["usable"]))
+    best = max(takes, key=lambda r: (r.get("combined", r["score"]), r["usable"]))
     final = out_dir / "reshoot_best.mp4"
     shutil.copyfile(best["video"], final)
     summary = {
@@ -772,9 +810,14 @@ def reshoot_best(
         "score": best["score"],
         "hits": best["hits"],
         "usable": best["usable"],
-        "takes": [{k: v for k, v in r.items() if k != "conformance"} for r in takes],
+        "takes": [{k: v for k, v in r.items() if k not in ("conformance", "preservation_items")}
+                  for r in takes],
         "checks": best["conformance"]["checks"],
     }
+    if brief is not None:  # S14
+        summary |= {"directed": direct, "preservation": best["preservation"], "kept": best["kept"],
+                    "combined": best["combined"], "w_preserve": w_preserve,
+                    "preservation_items": best["preservation_items"]}  # fmt: skip
     (out_dir / "reshoot_best.json").write_text(
         json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
     )
