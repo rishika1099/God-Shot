@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>God-Shot · Interactive Blocking Playground</title>
+  <title>God-Shot · Cinema Motion Editor</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,7 +20,7 @@
     </span>
     <div class="brand-text">
       <h1 class="brand">God-Shot</h1>
-      <span class="tag">Watch on left · Direct camera on right</span>
+      <span class="tag">Video on left · Motion editor on right</span>
     </div>
   </div>
 
@@ -41,15 +41,15 @@
 </header>
 
 <main id="workspace" tabindex="-1">
-  <!-- LEFT COLUMN: VIDEO + VERIFICATION -->
+  <!-- LEFT COLUMN: VIDEO MONITOR + VERIFY LOOP -->
   <section class="left">
     <div class="panel stage-panel">
       <div class="panel-head">
         <div class="head-left">
-          <h2>Video</h2>
+          <h2>Video Monitor</h2>
           <span id="segLabel" class="seg"></span>
         </div>
-        <span class="muted-meta">Synced to blocking board</span>
+        <span class="muted-meta">Scrub below or on the keyframe tracks →</span>
       </div>
 
       <div class="player">
@@ -60,12 +60,11 @@
               <rect x="3" y="5" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6"/>
               <path d="M17 10l4-2.5v9L17 14" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
             </svg>
-            <p>No video yet for this run. Hit Play to preview the blocking map on the right.</p>
+            <p>No video yet for this run. Hit Play to watch the motion path on the right.</p>
           </div>
         </div>
       </div>
 
-      <!-- Unified Playhead & Scrubber -->
       <div class="timeline">
         <button id="play" type="button" class="btn icon-btn" aria-label="Play or pause">▶</button>
         <input type="range" id="time" min="0" max="10" step="0.01" value="0" aria-label="Playback time">
@@ -74,7 +73,6 @@
       </div>
     </div>
 
-    <!-- Verify Loop & Confidence neatly below the video -->
     <div class="panel card verify-card">
       <div class="panel-head">
         <div class="head-left">
@@ -95,26 +93,27 @@
     </div>
   </section>
 
-  <!-- RIGHT COLUMN: INTERACTIVE EDITABLE PLAYGROUND + RENDER CONTROLS -->
+  <!-- RIGHT COLUMN: VIDEO-EDITOR MOTION STAGE + KEYFRAME TIMELINE -->
   <section class="right">
     <div class="panel mapwrap playground-panel">
       <div class="panel-head">
         <div class="head-left">
-          <h2>Interactive Camera Board</h2>
+          <h2>Motion Stage (Top-Down)</h2>
           <span id="keyTelemetry" class="mono key-telemetry"></span>
         </div>
         <div class="head-actions">
-          <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo map edit">↶ Undo</button>
-          <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo map edit">↷ Redo</button>
+          <button id="curveToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Smooth curved motion path (Catmull-Rom spline)">Smooth Curves</button>
+          <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo edit">↶ Undo</button>
+          <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo edit">↷ Redo</button>
         </div>
       </div>
 
-      <!-- Clean 1-row Mode & One-Click Bar -->
-      <div class="tool-strip" role="toolbar" aria-label="Blocking board tools">
-        <div class="tool-group" role="group" aria-label="Board mode">
-          <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Drag</button>
-          <button id="toolDraw" type="button" class="tool-btn" data-tool="draw" aria-pressed="false">Draw Path</button>
-          <button id="toolOrbit" type="button" class="tool-btn" data-tool="orbit" aria-pressed="false">Orbit</button>
+      <!-- Direct-Manipulation Tool Bar -->
+      <div class="tool-strip" role="toolbar" aria-label="Motion stage tools">
+        <div class="tool-group" role="group" aria-label="Interaction mode">
+          <button id="toolSelect" type="button" class="tool-btn active" data-tool="select" aria-pressed="true">Move Camera &amp; Actors</button>
+          <button id="toolDraw" type="button" class="tool-btn" data-tool="draw" aria-pressed="false">Draw Curve</button>
+          <button id="toolOrbit" type="button" class="tool-btn" data-tool="orbit" aria-pressed="false">Orbit Tool</button>
         </div>
 
         <div class="tool-divider" aria-hidden="true"></div>
@@ -136,20 +135,37 @@
         </div>
       </div>
 
-      <!-- Big Interactive Blueprint Canvas -->
+      <!-- Interactive Top-Down Stage -->
       <div class="canvas-frame">
         <canvas id="map"></canvas>
         <div id="modeBanner" class="mode-banner" aria-live="polite"></div>
+        <div id="hoverTip" class="hover-tip" aria-hidden="true"></div>
       </div>
 
-      <!-- Contextual Orbit Sliders (shown cleanly when orbiting or adjusting) -->
+      <!-- VIDEO-EDITOR MULTI-TRACK KEYFRAME TIMELINE -->
+      <div class="kf-editor">
+        <div class="kf-header">
+          <span class="kf-title">Keyframe Tracks</span>
+          <div class="kf-controls">
+            <div class="seg-toggle" role="group" aria-label="Actor drag behavior">
+              <button id="actorModeKey" type="button" class="seg-btn active" aria-pressed="true" title="Dragging an actor sets a keyframe at current time (animates walking)">Actor: Animate @ t</button>
+              <button id="actorModeAll" type="button" class="seg-btn" aria-pressed="false" title="Dragging an actor moves their position across the entire shot">Reposition All</button>
+            </div>
+            <button id="addKeyBtn" type="button" class="btn ghost xs">+ Cam Key</button>
+            <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>
+          </div>
+        </div>
+        <div id="kfTracks" class="kf-tracks" aria-label="Camera and actor keyframe tracks"></div>
+      </div>
+
+      <!-- 3 Clean Live Sliders -->
       <div id="orbitBar" class="orbit-bar">
         <div class="slider-chip">
-          <label for="orbitSweep">Sweep <span id="orbitSweepVal" class="mono">360°</span></label>
+          <label for="orbitSweep">Orbit Sweep <span id="orbitSweepVal" class="mono">360°</span></label>
           <input id="orbitSweep" type="range" min="45" max="720" step="15" value="360">
         </div>
         <div class="slider-chip">
-          <label for="orbitRadius">Radius <span id="orbitRadiusVal" class="mono">3.0u</span></label>
+          <label for="orbitRadius">Orbit Radius <span id="orbitRadiusVal" class="mono">3.0u</span></label>
           <input id="orbitRadius" type="range" min="0.8" max="8" step="0.1" value="3">
         </div>
         <div class="slider-chip">
@@ -166,21 +182,7 @@
       </div>
       <div id="msg" class="msg" role="status" aria-live="polite"></div>
 
-      <!-- Legend + Simple Hint -->
-      <div class="legend-bar">
-        <div class="legend" aria-label="Map legend">
-          <span class="legend-item"><span class="swatch swatch-cam" aria-hidden="true"></span>Camera</span>
-          <span class="legend-item"><span class="swatch swatch-ring" aria-hidden="true"></span>Yaw</span>
-          <span class="legend-item"><span class="swatch swatch-aim" aria-hidden="true"></span>Look-At</span>
-          <span class="legend-item"><span class="swatch swatch-ghost" aria-hidden="true"></span>Original</span>
-        </div>
-        <div class="key-mini">
-          <button id="addKeyBtn" type="button" class="btn ghost xs">+ Key @ t</button>
-          <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>
-        </div>
-      </div>
-
-      <!-- Optional Advanced / Text Prompt Drawer -->
+      <!-- Optional Advanced / Text Drawer -->
       <details class="advanced-drawer">
         <summary>Precision segment &amp; optional text edit</summary>
         <div class="drawer-body">

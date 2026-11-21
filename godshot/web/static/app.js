@@ -1,18 +1,21 @@
-// S09 (Siva) + Interactive Blocking Playground: run picker, verify-loop inspector, synced top-down map playground.
+// S09 (Siva) + Video-Editor Motion Stage: run picker, verify-loop inspector, spline motion editor & keyframe tracks.
 // Vanilla JS, no build step.
 // Conventions (contracts.md): x → right, y → forward; yaw 0 = +y, positive = camera turned to ITS LEFT.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const S = {
-  runId: null, run: null, orig: null, scene: null, t: 0, playing: false, lastTick: 0,
-  round: null, sel: { cam: null }, drag: null, hover: null, view: null, offline: false, jobTimer: null,
-  tool: "select", loop: true, orbitDir: 1, orbitSweep: 360, orbitRadius: null, lastOrbitAnchor: null,
+  runId: null, run: null, orig: null, scene: null, waypoints: [],
+  t: 0, playing: false, lastTick: 0, round: null,
+  sel: { cam: null, actor: null }, drag: null, hover: null, view: null, offline: false, jobTimer: null,
+  tool: "select", loop: true, curveMode: true, actorDragMode: "key",
+  orbitDir: 1, orbitSweep: 360, orbitRadius: null, lastOrbitAnchor: null,
   drawStroke: null, orbitDraft: null, undo: [], redo: [],
+  kfDrag: null,
 };
 const COLORS = {
   bg: "#0b0e14", gridMinor: "#141925", gridMajor: "#1d2435", roomFill: "rgba(148,163,184,0.05)",
-  room: "#94a3b8", cam: "#3ee88b", camDim: "rgba(62,232,139,0.55)", ghost: "#7c879e", aim: "#4f9eff",
+  room: "#94a3b8", cam: "#3ee88b", camDim: "rgba(62,232,139,0.7)", ghost: "#7c879e", aim: "#4f9eff",
 };
 
 // ------------------------------------------------------------------ math (mirrors godshot/geometry.py)
@@ -65,10 +68,84 @@ const mmss = (t) => {
 };
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+// ------------------------------------------------------------------ Centripetal Catmull-Rom Spline Baker
+function catmullRom2D(p0, p1, p2, p3, u) {
+  // Centripetal parameterization (alpha = 0.5) avoids cusps and overshoot loops
+  const dist = (a, b) => Math.max(1e-4, Math.hypot(b[0] - a[0], b[1] - a[1]) ** 0.5);
+  const t0 = 0, t1 = t0 + dist(p0, p1), t2 = t1 + dist(p1, p2), t3 = t2 + dist(p2, p3);
+  const t = lerp(t1, t2, u);
+  const interp = (a, b, ta, tb) => {
+    const f = (t - ta) / (tb - ta);
+    return [lerp(a[0], b[0], f), lerp(a[1], b[1], f)];
+  };
+  const A1 = interp(p0, p1, t0, t1), A2 = interp(p1, p2, t1, t2), A3 = interp(p2, p3, t2, t3);
+  const B1 = interp(A1, A2, t0, t2), B2 = interp(A2, A3, t1, t3);
+  return interp(B1, B2, t1, t2);
+}
+
+function extractWaypointsFromTrack(track, maxCtrl = 9) {
+  const ks = sortedKeys(track);
+  if (ks.length <= maxCtrl) return clone(ks);
+  const out = [];
+  for (let i = 0; i < maxCtrl; i++) {
+    const idx = Math.round((i * (ks.length - 1)) / (maxCtrl - 1));
+    out.push(clone(ks[idx]));
+  }
+  return out;
+}
+
+function bakeCameraCurve() {
+  if (!S.scene) return;
+  S.waypoints = sortedKeys(S.waypoints);
+  const wps = S.waypoints;
+  if (wps.length === 0) return;
+  if (!S.curveMode || wps.length < 3) {
+    // Linear mode (or <3 points)
+    S.scene.camera.track = wps.map((k) => ({
+      t: roundN(k.t, 3), mmss: mmss(k.t), x: roundN(k.x, 4), y: roundN(k.y, 4), yaw_deg: roundN(wrap180(k.yaw_deg), 3),
+    }));
+    return;
+  }
+  const autoAim = $("autoAim")?.checked;
+  const tid = lockedTargetId();
+  const baked = [];
+  for (let i = 0; i < wps.length - 1; i++) {
+    const a = wps[i], b = wps[i + 1];
+    const p1 = [a.x, a.y], p2 = [b.x, b.y];
+    const p0 = i > 0 ? [wps[i - 1].x, wps[i - 1].y] : [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
+    const p3 = i + 2 < wps.length ? [wps[i + 2].x, wps[i + 2].y] : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
+    const dt = b.t - a.t;
+    const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    const steps = Math.max(4, Math.min(10, Math.ceil(Math.max(dt / 0.35, segLen * 2.2))));
+    for (let s = 0; s < steps; s++) {
+      const u = s / steps;
+      const t = roundN(lerp(a.t, b.t, u), 3);
+      const [x, y] = catmullRom2D(p0, p1, p2, p3, u);
+      let yaw = lerpAngle(a.yaw_deg, b.yaw_deg, u);
+      if (autoAim && tid) {
+        const tgt = entityPosAt(S.scene, tid, t);
+        if (tgt) yaw = yawTowards(x, y, tgt.x, tgt.y);
+      }
+      baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
+    }
+  }
+  const last = wps[wps.length - 1];
+  let lastYaw = last.yaw_deg;
+  if (autoAim && tid) {
+    const tgt = entityPosAt(S.scene, tid, last.t);
+    if (tgt) lastYaw = yawTowards(last.x, last.y, tgt.x, tgt.y);
+  }
+  baked.push({
+    t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4),
+    yaw_deg: roundN(wrap180(lastYaw), 3),
+  });
+  S.scene.camera.track = baked;
+}
+
 // ------------------------------------------------------------------ undo / redo
 function pushUndo() {
   if (!S.scene) return;
-  S.undo.push(clone(S.scene));
+  S.undo.push({ scene: clone(S.scene), waypoints: clone(S.waypoints) });
   if (S.undo.length > 40) S.undo.shift();
   S.redo = [];
   syncHistoryButtons();
@@ -77,28 +154,31 @@ function syncHistoryButtons() {
   if ($("undoBtn")) $("undoBtn").disabled = S.undo.length === 0;
   if ($("redoBtn")) $("redoBtn").disabled = S.redo.length === 0;
   if ($("delKeyBtn")) {
-    const canDel = S.sel.cam != null && (S.scene?.camera.track.length || 0) > 1;
+    const canDel = S.sel.cam != null && S.waypoints.length > 1;
     $("delKeyBtn").disabled = !canDel;
   }
   updateKeyTelemetry();
+  renderKeyframeTracks();
 }
 function doUndo() {
   if (!S.undo.length) return;
-  S.redo.push(clone(S.scene));
-  S.scene = S.undo.pop();
+  S.redo.push({ scene: clone(S.scene), waypoints: clone(S.waypoints) });
+  const prev = S.undo.pop();
+  S.scene = prev.scene; S.waypoints = prev.waypoints;
   S.sel.cam = null;
   syncFovUI();
   syncHistoryButtons();
-  msg("Undid last blocking edit.");
+  msg("Undid last edit.");
 }
 function doRedo() {
   if (!S.redo.length) return;
-  S.undo.push(clone(S.scene));
-  S.scene = S.redo.pop();
+  S.undo.push({ scene: clone(S.scene), waypoints: clone(S.waypoints) });
+  const next = S.redo.pop();
+  S.scene = next.scene; S.waypoints = next.waypoints;
   S.sel.cam = null;
   syncFovUI();
   syncHistoryButtons();
-  msg("Redid blocking edit.");
+  msg("Redid edit.");
 }
 function syncFovUI() {
   if (!S.scene) return;
@@ -108,9 +188,9 @@ function syncFovUI() {
 function updateKeyTelemetry() {
   const el = $("keyTelemetry");
   if (!el) return;
-  if (S.sel.cam == null || !S.scene) { el.textContent = ""; return; }
-  const k = sortedKeys(S.scene.camera.track)[S.sel.cam];
-  el.textContent = k ? `Key #${S.sel.cam + 1} · ${k.t.toFixed(2)}s · (${k.x.toFixed(1)}, ${k.y.toFixed(1)}) · ${Math.round(k.yaw_deg)}°` : "";
+  if (S.sel.cam == null || !S.waypoints[S.sel.cam]) { el.textContent = ""; return; }
+  const k = S.waypoints[S.sel.cam];
+  el.textContent = `Cam Key #${S.sel.cam + 1} · ${k.t.toFixed(2)}s · yaw ${Math.round(k.yaw_deg)}°`;
 }
 
 // ------------------------------------------------------------------ api
@@ -157,7 +237,9 @@ async function openRun(id) {
   S.run = await api(`/api/run/${encodeURIComponent(id)}`);
   S.orig = S.run.scene;
   S.scene = clone(S.run.scene_edit || S.run.scene);
-  S.t = 0; S.sel.cam = null; S.undo = []; S.redo = []; S.lastOrbitAnchor = null; S.orbitRadius = null;
+  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
+  S.t = 0; S.sel.cam = null; S.sel.actor = null; S.undo = []; S.redo = [];
+  S.lastOrbitAnchor = null; S.orbitRadius = null;
   const dur = S.orig.clip.duration_s;
   $("time").max = dur; $("t1").value = Math.min(4, dur);
   syncFovUI();
@@ -169,12 +251,11 @@ async function openRun(id) {
     for (const e of entities) {
       const o = document.createElement("option");
       o.value = e.id;
-      const shortDesc = e.visual_description.length > 28 ? e.visual_description.slice(0, 27) + "…" : e.visual_description;
+      const shortDesc = e.visual_description.length > 26 ? e.visual_description.slice(0, 25) + "…" : e.visual_description;
       o.textContent = `${e.id} · ${shortDesc}`;
       el.appendChild(o);
     }
   }
-  // Default orbit radius from initial camera-to-subject distance
   const tgt = entityPosAt(S.scene, lockedTargetId(), 0);
   const c0 = camAt(S.scene, 0);
   const initR = tgt ? Math.max(1.0, Math.min(8.0, Math.hypot(c0.x - tgt.x, c0.y - tgt.y))) : 3.0;
@@ -188,13 +269,190 @@ async function openRun(id) {
   renderInspector();
   badges();
   syncHistoryButtons();
-  msg(S.run.scene_edit ? "Loaded your latest saved edit (dashed grey = original path)." : "");
+  msg(S.run.scene_edit
+    ? "Loaded your latest saved edit. Drag the green camera or actors directly to re-block."
+    : "Tip: scrub to any time, then drag the green camera or an actor directly to curve the path.");
 }
 
 function setVideo(url) {
   const v = $("video");
   if (url) { v.src = url; v.style.display = "block"; $("noVideo").style.display = "none"; }
   else { v.removeAttribute("src"); v.load(); v.style.display = "none"; $("noVideo").style.display = "flex"; }
+}
+
+// ------------------------------------------------------------------ Video-Editor Multi-Track Keyframe Timeline
+function renderKeyframeTracks() {
+  const host = $("kfTracks");
+  if (!host || !S.scene || !S.orig) return;
+  const dur = Math.max(0.1, S.orig.clip.duration_s);
+  const pct = (t) => `${Math.max(0, Math.min(100, (t / dur) * 100)).toFixed(2)}%`;
+
+  host.innerHTML = "";
+
+  // 1. Time Ruler Row
+  const rulerRow = document.createElement("div");
+  rulerRow.className = "kf-ruler-row";
+  rulerRow.innerHTML = `<span class="kf-label mono" style="color:var(--muted)">Timeline</span>`;
+  const ruler = document.createElement("div");
+  ruler.className = "kf-ruler";
+  const tickCount = Math.min(8, Math.max(3, Math.round(dur / 2)));
+  for (let i = 0; i <= tickCount; i++) {
+    const tt = (dur * i) / tickCount;
+    const sp = document.createElement("span");
+    sp.className = "kf-tick mono";
+    sp.style.left = pct(tt);
+    sp.textContent = `${tt.toFixed(dur < 5 ? 1 : 0)}s`;
+    ruler.appendChild(sp);
+  }
+  const rulerPH = document.createElement("div");
+  rulerPH.className = "kf-playhead";
+  rulerPH.style.left = pct(S.t);
+  ruler.appendChild(rulerPH);
+
+  const scrubLane = (ev, laneEl) => {
+    const r = laneEl.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
+    seek(frac * dur);
+  };
+  ruler.addEventListener("pointerdown", (ev) => {
+    ruler.setPointerCapture(ev.pointerId);
+    S.kfDrag = { kind: "scrub", el: ruler };
+    scrubLane(ev, ruler);
+  });
+  ruler.addEventListener("pointermove", (ev) => { if (S.kfDrag?.kind === "scrub") scrubLane(ev, ruler); });
+  ruler.addEventListener("pointerup", () => { if (S.kfDrag?.kind === "scrub") S.kfDrag = null; });
+  rulerRow.appendChild(ruler);
+  host.appendChild(rulerRow);
+
+  // Helper to build a track lane
+  function makeTrackRow(label, color, keys, onAdd, onSelect, onMoveTime) {
+    const row = document.createElement("div");
+    row.className = "kf-row";
+    const lbl = document.createElement("div");
+    lbl.className = "kf-label";
+    lbl.innerHTML = `<span class="kf-label-name"><span class="kf-dot" style="background:${color}"></span><span>${escapeHtml(label)}</span></span>`;
+    const addB = document.createElement("button");
+    addB.type = "button";
+    addB.className = "kf-add-mini";
+    addB.textContent = "+◆";
+    addB.title = `Add keyframe for ${label} at current time`;
+    addB.onclick = (e) => { e.stopPropagation(); onAdd(); };
+    lbl.appendChild(addB);
+    row.appendChild(lbl);
+
+    const lane = document.createElement("div");
+    lane.className = "kf-lane";
+    const ph = document.createElement("div");
+    ph.className = "kf-playhead";
+    ph.style.left = pct(S.t);
+    lane.appendChild(ph);
+
+    lane.addEventListener("pointerdown", (ev) => {
+      if (ev.target.classList.contains("kf-diamond")) return;
+      scrubLane(ev, lane);
+    });
+
+    keys.forEach((k, idx) => {
+      const d = document.createElement("button");
+      d.type = "button";
+      d.className = "kf-diamond" + (k.selected ? " selected" : "");
+      d.style.left = pct(k.t);
+      d.style.background = color;
+      d.title = `${label} @ ${k.t.toFixed(2)}s (click to jump, drag to re-time)`;
+      d.setAttribute("aria-label", `${label} keyframe at ${k.t.toFixed(1)} seconds`);
+
+      d.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        d.setPointerCapture(ev.pointerId);
+        onSelect(idx);
+        S.kfDrag = { kind: "key", lane, idx, pushed: false, onMoveTime };
+      });
+      d.addEventListener("pointermove", (ev) => {
+        if (S.kfDrag?.kind !== "key" || S.kfDrag.idx !== idx) return;
+        const r = lane.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
+        const newT = roundN(frac * dur, 2);
+        if (!S.kfDrag.pushed) { pushUndo(); S.kfDrag.pushed = true; }
+        onMoveTime(idx, newT);
+        d.style.left = pct(newT);
+      });
+      d.addEventListener("pointerup", () => {
+        if (S.kfDrag?.kind === "key") {
+          const changed = S.kfDrag.pushed;
+          S.kfDrag = null;
+          if (changed) syncHistoryButtons();
+        }
+      });
+      lane.appendChild(d);
+    });
+
+    row.appendChild(lane);
+    host.appendChild(row);
+  }
+
+  // 2. Camera Track
+  makeTrackRow(
+    "Camera",
+    COLORS.cam,
+    S.waypoints.map((k, i) => ({ t: k.t, selected: S.sel.cam === i })),
+    () => {
+      const c = camAt(S.scene, S.t);
+      addKeyframeAt(c.x, c.y, S.t);
+    },
+    (idx) => {
+      S.sel.cam = idx;
+      seek(S.waypoints[idx].t);
+      syncHistoryButtons();
+    },
+    (idx, newT) => {
+      S.waypoints[idx].t = newT;
+      S.waypoints[idx].mmss = mmss(newT);
+      bakeCameraCurve();
+      seek(newT);
+      markDirty(`Re-timed camera keyframe to ${newT.toFixed(2)}s.`);
+    },
+  );
+
+  // 3. Actor Tracks
+  for (const a of S.scene.actors) {
+    const aKeys = sortedKeys(a.track);
+    makeTrackRow(
+      a.id,
+      a.color || "#f87171",
+      aKeys.map((k, i) => ({ t: k.t, selected: S.sel.actor?.id === a.id && S.sel.actor?.index === i })),
+      () => {
+        pushUndo();
+        const p = actorAt(a, S.t);
+        const ks = sortedKeys(a.track);
+        const near = ks.findIndex((k) => Math.abs(k.t - S.t) < 0.12);
+        const nk = { t: roundN(S.t, 3), mmss: mmss(S.t), x: roundN(p.x, 3), y: roundN(p.y, 3), facing_deg: roundN(p.facing, 2), visible: p.visible };
+        if (near >= 0) ks[near] = nk; else ks.push(nk);
+        a.track = sortedKeys(ks);
+        S.sel.actor = { id: a.id, index: a.track.findIndex((k) => k.t === nk.t) };
+        syncHistoryButtons();
+        markDirty(`Added ${a.id} keyframe at ${nk.t.toFixed(2)}s.`);
+      },
+      (idx) => {
+        S.sel.actor = { id: a.id, index: idx };
+        seek(sortedKeys(a.track)[idx].t);
+        syncHistoryButtons();
+      },
+      (idx, newT) => {
+        a.track = sortedKeys(a.track);
+        a.track[idx].t = newT;
+        a.track[idx].mmss = mmss(newT);
+        seek(newT);
+        markDirty(`Re-timed ${a.id} keyframe to ${newT.toFixed(2)}s.`);
+      },
+    );
+  }
+}
+
+function updateTimelinePlayheads() {
+  if (!S.orig) return;
+  const dur = Math.max(0.1, S.orig.clip.duration_s);
+  const left = `${Math.max(0, Math.min(100, (S.t / dur) * 100)).toFixed(2)}%`;
+  document.querySelectorAll(".kf-playhead").forEach((el) => { el.style.left = left; });
 }
 
 // ------------------------------------------------------------------ inspector
@@ -236,22 +494,16 @@ function renderInspector() {
       const pct = Math.round(curRate * 100);
       pill.textContent = `${pct}% pass`;
       pill.className = "pass-pill" + (pct >= 85 ? "" : pct >= 60 ? " warn" : " bad");
-    } else {
-      pill.textContent = "";
-      pill.className = "pass-pill";
-    }
+    } else { pill.textContent = ""; pill.className = "pass-pill"; }
   }
-
   const bar = $("roundBar");
   if (bar) {
-    if (checks.length) {
-      bar.innerHTML =
-        (nPass ? `<span class="pb-pass" style="flex:${nPass}"></span>` : "") +
+    bar.innerHTML = checks.length
+      ? (nPass ? `<span class="pb-pass" style="flex:${nPass}"></span>` : "") +
         (nUnc ? `<span class="pb-unc" style="flex:${nUnc}"></span>` : "") +
-        (nFail ? `<span class="pb-fail" style="flex:${nFail}"></span>` : "");
-    } else bar.innerHTML = "";
+        (nFail ? `<span class="pb-fail" style="flex:${nFail}"></span>` : "")
+      : "";
   }
-
   $("roundStats").textContent = checks.length
     ? `${checks.length} checks · ✔ ${nPass} pass · ✘ ${nFail} fail · ? ${nUnc} uncertain` +
       (activeEntry.latency_s ? ` · ${Number(activeEntry.latency_s).toFixed(1)}s` : "")
@@ -259,13 +511,8 @@ function renderInspector() {
 
   const changesEl = $("roundChanges");
   if (changesEl) {
-    if (activeEntry.changes) {
-      changesEl.textContent = activeEntry.changes;
-      changesEl.hidden = false;
-    } else {
-      changesEl.textContent = "";
-      changesEl.hidden = true;
-    }
+    if (activeEntry.changes) { changesEl.textContent = activeEntry.changes; changesEl.hidden = false; }
+    else { changesEl.textContent = ""; changesEl.hidden = true; }
   }
 
   const ul = $("checks"); ul.innerHTML = "";
@@ -285,10 +532,10 @@ function renderInspector() {
   }
   const lc = $("lowconf"); lc.innerHTML = "";
   const flagged = S.scene.low_confidence || [];
-  if ($("lowconfCount")) $("lowconfCount").textContent = flagged.length ? `${flagged.length} flagged` : "All clear";
+  if ($("lowconfCount")) $("lowconfCount").textContent = flagged.length ? `${flagged.length} low-conf` : "All tracks verified";
   for (const l of flagged) {
     const li = document.createElement("li");
-    li.textContent = `⚠ ${l.entity_id} @ ${mmss(l.t0)}–${mmss(l.t1)} (${l.failed_checks.length} failed check${l.failed_checks.length === 1 ? "" : "s"})`;
+    li.textContent = `⚠ ${l.entity_id} @ ${mmss(l.t0)}–${mmss(l.t1)} (${l.failed_checks.length} failed)`;
     li.onclick = () => seek(l.t0);
     lc.appendChild(li);
   }
@@ -301,7 +548,7 @@ function showThumb(path, ev) {
 }
 function moveThumb(ev) {
   const im = $("thumb"), w = 320, h = 190;
-  const x = Math.max(12, Math.min(ev.clientX - w - 18, window.innerWidth - w - 12));
+  const x = Math.max(12, Math.min(ev.clientX + 18, window.innerWidth - w - 12));
   const y = Math.max(12, Math.min(ev.clientY + 14, window.innerHeight - h - 12));
   im.style.left = x + "px"; im.style.top = y + "px";
 }
@@ -312,6 +559,7 @@ function seek(t) {
   S.t = Math.max(0, Math.min(t, S.orig?.clip.duration_s || 0));
   const v = $("video");
   if (v.src && Math.abs(v.currentTime - S.t) > 0.05) v.currentTime = S.t;
+  updateTimelinePlayheads();
 }
 function startMapPreview() {
   const v = $("video");
@@ -323,7 +571,6 @@ function startMapPreview() {
 $("time").oninput = (e) => seek(parseFloat(e.target.value));
 $("play").onclick = () => {
   const v = $("video");
-  // If scene has unsaved interactive edits, play the live map preview independently of the old video!
   const edited = S.orig && S.scene && JSON.stringify(S.orig.camera.track) !== JSON.stringify(S.scene.camera.track);
   if (v.src && !edited) { v.paused ? v.play() : v.pause(); return; }
   S.playing = !S.playing; S.lastTick = performance.now();
@@ -338,6 +585,25 @@ if ($("loopToggle")) {
     $("loopToggle").setAttribute("aria-pressed", String(S.loop));
     $("loopToggle").classList.toggle("active-pill", S.loop);
   };
+}
+if ($("curveToggle")) {
+  $("curveToggle").onclick = () => {
+    S.curveMode = !S.curveMode;
+    $("curveToggle").setAttribute("aria-pressed", String(S.curveMode));
+    $("curveToggle").classList.toggle("active-pill", S.curveMode);
+    if (S.scene) { pushUndo(); bakeCameraCurve(); syncHistoryButtons(); markDirty(S.curveMode ? "Switched to Smooth Curved motion paths." : "Switched to Linear (straight) segments."); }
+  };
+}
+if ($("actorModeKey") && $("actorModeAll")) {
+  const setActorMode = (mode) => {
+    S.actorDragMode = mode;
+    $("actorModeKey").classList.toggle("active", mode === "key");
+    $("actorModeKey").setAttribute("aria-pressed", String(mode === "key"));
+    $("actorModeAll").classList.toggle("active", mode === "all");
+    $("actorModeAll").setAttribute("aria-pressed", String(mode === "all"));
+  };
+  $("actorModeKey").onclick = () => setActorMode("key");
+  $("actorModeAll").onclick = () => setActorMode("all");
 }
 
 function tick(now) {
@@ -356,6 +622,7 @@ function tick(now) {
     }
     S.lastTick = now;
     $("time").value = S.t; $("timeLabel").textContent = mmss(S.t);
+    updateTimelinePlayheads();
     const seg = (S.scene.camera.motion_segments || []).find((s) => S.t >= s.t0 && S.t <= s.t1);
     $("segLabel").textContent = seg
       ? [seg.translation, seg.rotation].filter((x) => x && x !== "none" && x !== "static").join(" · ").replaceAll("_", " ")
@@ -365,7 +632,7 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
-// ------------------------------------------------------------------ interactive playground choreography
+// ------------------------------------------------------------------ interactive choreography
 function setTool(tool) {
   S.tool = tool;
   S.drawStroke = null;
@@ -377,16 +644,13 @@ function setTool(tool) {
   });
   const banner = $("modeBanner");
   if (banner) {
-    if (tool === "draw") banner.textContent = "Draw Mode: click & drag anywhere on the floor plan to sketch a custom camera path";
-    else if (tool === "orbit") banner.textContent = "Orbit Mode: click on a character (or anywhere) and drag outward to sculpt an orbit ring";
+    if (tool === "draw") banner.textContent = "Draw Curve: click & drag anywhere to sketch a smooth curved camera path";
+    else if (tool === "orbit") banner.textContent = "Orbit Tool: click a character and drag outward to sculpt an orbit circle";
     else banner.textContent = "";
   }
   canvas.style.cursor = tool === "select" ? "default" : "crosshair";
 }
-
-document.querySelectorAll(".tool-btn").forEach((b) => {
-  b.onclick = () => setTool(b.dataset.tool);
-});
+document.querySelectorAll(".tool-btn").forEach((b) => { b.onclick = () => setTool(b.dataset.tool); });
 
 function buildOrbitTrack(anchor, sweepDeg, dir, radiusOverride) {
   if (!S.scene) return;
@@ -400,21 +664,22 @@ function buildOrbitTrack(anchor, sweepDeg, dir, radiusOverride) {
   const r = radiusOverride != null ? radiusOverride : (baseDist > 0.4 ? baseDist : 3.0);
   const startAngle = baseDist > 0.2 ? Math.atan2(ry0, rx0) : -Math.PI / 2;
 
-  // At least 1 key every 15° (so lerpAngle never wraps the wrong way on 360° or 720°!)
-  const steps = Math.max(12, Math.min(60, Math.ceil(Math.abs(sweepDeg) / 15)));
+  // Clean editable control waypoints every 45° (e.g. 9 handles for 360°), then spline-baked into smooth 25+ keys!
+  const ctrlSteps = Math.max(4, Math.min(16, Math.round(Math.abs(sweepDeg) / 45)));
   const autoAim = $("autoAim") ? $("autoAim").checked : true;
-  const keys = [];
-  for (let i = 0; i <= steps; i++) {
-    const f = i / steps;
+  const wps = [];
+  for (let i = 0; i <= ctrlSteps; i++) {
+    const f = i / ctrlSteps;
     const t = roundN(dur * f, 3);
     const ctr = anchor.entityId ? (entityPosAt(S.scene, anchor.entityId, t) || center0) : center0;
     const phi = startAngle + rad(sweepDeg * f * dir);
     const x = ctr.x + r * Math.cos(phi);
     const y = ctr.y + r * Math.sin(phi);
     const yaw = autoAim ? yawTowards(x, y, ctr.x, ctr.y) : wrap180(c0.yaw + sweepDeg * f * dir);
-    keys.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
+    wps.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
   }
-  S.scene.camera.track = keys;
+  S.waypoints = wps;
+  bakeCameraCurve();
   S.scene.camera.motion_segments = [
     { t0: 0, t1: roundN(dur, 3), translation: dir > 0 ? "arc_right" : "arc_left", rotation: "none" },
   ];
@@ -426,7 +691,7 @@ function buildOrbitTrack(anchor, sweepDeg, dir, radiusOverride) {
     $("orbitRadiusVal").textContent = r.toFixed(1) + "u";
   }
   syncHistoryButtons();
-  markDirty(`${sweepDeg}° ${dir > 0 ? "CCW" : "CW"} orbit around ${anchor.entityId || "point"} (R=${r.toFixed(1)}u). Hit Re-render or Re-shoot!`);
+  markDirty(`${sweepDeg}° ${dir > 0 ? "CCW" : "CW"} curved orbit around ${anchor.entityId || "point"} (R=${r.toFixed(1)}u). Drag any dot to reshape!`);
   startMapPreview();
 }
 
@@ -437,28 +702,23 @@ function buildPushInTrack() {
   const c0 = camAt(S.scene, 0);
   const tgt0 = entityPosAt(S.scene, tid, 0);
   const f0 = fwdVec(c0.yaw);
-  const tx = tgt0 ? tgt0.x : c0.x + f0[0] * 4;
-  const ty = tgt0 ? tgt0.y : c0.y + f0[1] * 4;
+  const tx = tgt0 ? tgt0.x : c0.x + f0[0] * 4, ty = tgt0 ? tgt0.y : c0.y + f0[1] * 4;
   const dx = tx - c0.x, dy = ty - c0.y, dist = Math.hypot(dx, dy);
   const moveDist = Math.max(0.8, dist * 0.52);
   const ux = dist > 0.05 ? dx / dist : f0[0], uy = dist > 0.05 ? dy / dist : f0[1];
   pushUndo();
-  const steps = Math.max(6, Math.ceil(dur / 0.5));
-  const keys = [];
-  for (let i = 0; i <= steps; i++) {
-    const f = i / steps;
-    const ease = f * f * (3 - 2 * f); // smoothstep cinema ramp
-    const t = roundN(dur * f, 3);
-    const x = c0.x + ux * moveDist * ease;
-    const y = c0.y + uy * moveDist * ease;
+  const wps = [];
+  for (let i = 0; i <= 4; i++) {
+    const f = i / 4, ease = f * f * (3 - 2 * f), t = roundN(dur * f, 3);
+    const x = c0.x + ux * moveDist * ease, y = c0.y + uy * moveDist * ease;
     const tgt = entityPosAt(S.scene, tid, t) || { x: tx, y: ty };
     const yaw = ($("autoAim")?.checked ?? true) ? yawTowards(x, y, tgt.x, tgt.y) : c0.yaw;
-    keys.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
+    wps.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
   }
-  S.scene.camera.track = keys;
+  S.waypoints = wps;
+  bakeCameraCurve();
   S.scene.camera.motion_segments = [{ t0: 0, t1: roundN(dur, 3), translation: "dolly_in", rotation: "none" }];
-  S.lastOrbitAnchor = null;
-  S.sel.cam = null;
+  S.lastOrbitAnchor = null; S.sel.cam = null;
   syncHistoryButtons();
   markDirty(`Applied smooth push-in toward ${tid || "frame center"}.`);
   startMapPreview();
@@ -466,26 +726,22 @@ function buildPushInTrack() {
 
 function commitDrawnStroke(pts) {
   if (!S.scene || pts.length < 2) return;
-  // Compute cumulative arc length
   const cum = [0];
-  for (let i = 1; i < pts.length; i++) {
-    cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  }
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
   const totalLen = cum[cum.length - 1];
   if (totalLen < 0.25) return;
 
   const dur = S.orig.clip.duration_s;
-  const nKeys = Math.max(8, Math.min(28, Math.round(Math.max(dur / 0.4, totalLen * 1.6))));
+  // 8–12 clean editable spline control points along the sketched stroke
+  const nCtrl = Math.max(6, Math.min(12, Math.round(totalLen * 1.1)));
   const sampled = [];
-  for (let i = 0; i <= nKeys; i++) {
-    const targetD = (totalLen * i) / nKeys;
-    let j = 1;
-    while (j < cum.length - 1 && cum[j] < targetD) j++;
+  for (let i = 0; i <= nCtrl; i++) {
+    const targetD = (totalLen * i) / nCtrl;
+    let j = 1; while (j < cum.length - 1 && cum[j] < targetD) j++;
     const segLen = cum[j] - cum[j - 1];
     const frac = segLen > 1e-6 ? (targetD - cum[j - 1]) / segLen : 0;
     sampled.push([lerp(pts[j - 1][0], pts[j][0], frac), lerp(pts[j - 1][1], pts[j][1], frac)]);
   }
-  // Light 2-pass smoothing on interior points so hand-drawn curves feel like dolly tracks
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 1; i < sampled.length - 1; i++) {
       sampled[i] = [
@@ -494,143 +750,109 @@ function commitDrawnStroke(pts) {
       ];
     }
   }
-
   pushUndo();
   const autoAim = $("autoAim") ? $("autoAim").checked : true;
   const tid = lockedTargetId();
-  const keys = [];
+  const wps = [];
   for (let i = 0; i < sampled.length; i++) {
-    const f = i / (sampled.length - 1);
-    const t = roundN(dur * f, 3);
-    const [x, y] = sampled[i];
-    let yaw;
+    const f = i / (sampled.length - 1), t = roundN(dur * f, 3), [x, y] = sampled[i];
     const tgt = autoAim ? entityPosAt(S.scene, tid, t) : null;
-    if (tgt) {
-      yaw = yawTowards(x, y, tgt.x, tgt.y);
-    } else {
-      const next = sampled[Math.min(i + 1, sampled.length - 1)];
-      const prev = sampled[Math.max(i - 1, 0)];
-      yaw = yawTowards(prev[0], prev[1], next[0], next[1]);
-    }
-    keys.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
+    const yaw = tgt ? yawTowards(x, y, tgt.x, tgt.y)
+      : yawTowards(sampled[Math.max(i - 1, 0)][0], sampled[Math.max(i - 1, 0)][1],
+                   sampled[Math.min(i + 1, sampled.length - 1)][0], sampled[Math.min(i + 1, sampled.length - 1)][1]);
+    wps.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(yaw, 3) });
   }
-
-  // Classify dominant motion for segment badge (net turn around target → arc, else dolly/truck)
+  S.waypoints = wps;
+  bakeCameraCurve();
   let segMove = "dolly_in";
   if (autoAim && tid) {
     const c = entityPosAt(S.scene, tid, dur / 2);
     if (c) {
       let sweep = 0;
       for (let i = 1; i < sampled.length; i++) {
-        const a0 = Math.atan2(sampled[i - 1][1] - c.y, sampled[i - 1][0] - c.x);
-        const a1 = Math.atan2(sampled[i][1] - c.y, sampled[i][0] - c.x);
-        sweep += wrap180(deg(a1 - a0));
+        sweep += wrap180(deg(Math.atan2(sampled[i][1] - c.y, sampled[i][0] - c.x) - Math.atan2(sampled[i - 1][1] - c.y, sampled[i - 1][0] - c.x)));
       }
       if (Math.abs(sweep) > 35) segMove = sweep > 0 ? "arc_right" : "arc_left";
     }
   }
-  S.scene.camera.track = keys;
   S.scene.camera.motion_segments = [{ t0: 0, t1: roundN(dur, 3), translation: segMove, rotation: "none" }];
-  S.lastOrbitAnchor = null;
-  S.sel.cam = null;
+  S.lastOrbitAnchor = null; S.sel.cam = null;
   syncHistoryButtons();
-  markDirty(`Sketched ${keys.length}-keyframe custom path (${totalLen.toFixed(1)}u)${autoAim && tid ? ` locked onto ${tid}` : ""}.`);
+  markDirty(`Sketched smooth curved camera path (${wps.length} keyframes)${autoAim && tid ? ` locked onto ${tid}` : ""}.`);
   startMapPreview();
 }
 
 function addKeyframeAt(wx, wy, t) {
   if (!S.scene) return;
   pushUndo();
-  const track = sortedKeys(S.scene.camera.track);
   const tid = lockedTargetId();
   const tgt = ($("autoAim")?.checked ?? true) ? entityPosAt(S.scene, tid, t) : null;
   const yaw = tgt ? yawTowards(wx, wy, tgt.x, tgt.y) : camAt(S.scene, t).yaw;
-  // Replace if within 0.08s of existing key, otherwise insert
-  const nearIdx = track.findIndex((k) => Math.abs(k.t - t) < 0.08);
+  const nearIdx = S.waypoints.findIndex((k) => Math.abs(k.t - t) < 0.2);
   const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(wx, 4), y: roundN(wy, 4), yaw_deg: roundN(yaw, 3) };
-  if (nearIdx >= 0) track[nearIdx] = nk;
-  else track.push(nk);
-  S.scene.camera.track = sortedKeys(track);
-  S.sel.cam = S.scene.camera.track.findIndex((k) => k.t === nk.t);
+  if (nearIdx >= 0) S.waypoints[nearIdx] = nk;
+  else S.waypoints.push(nk);
+  S.waypoints = sortedKeys(S.waypoints);
+  S.sel.cam = S.waypoints.findIndex((k) => k.t === nk.t);
+  bakeCameraCurve();
   S.lastOrbitAnchor = null;
   syncHistoryButtons();
-  markDirty(`Added camera keyframe at ${nk.t.toFixed(2)}s.`);
+  markDirty(`Added curved camera keyframe at ${nk.t.toFixed(2)}s.`);
 }
 
 function deleteSelectedKey() {
-  if (!S.scene || S.sel.cam == null) return;
-  const track = sortedKeys(S.scene.camera.track);
-  if (track.length <= 1) return;
+  if (!S.scene || S.sel.cam == null || S.waypoints.length <= 1) return;
   pushUndo();
-  track.splice(S.sel.cam, 1);
-  S.scene.camera.track = track;
+  S.waypoints.splice(S.sel.cam, 1);
   S.sel.cam = null;
+  bakeCameraCurve();
   syncHistoryButtons();
   markDirty("Deleted camera keyframe.");
 }
 
-// Playground toolbar bindings
+// Toolbar bindings
 if ($("quickOrbit360")) $("quickOrbit360").onclick = () => {
   if (!S.scene) return;
   S.orbitSweep = 360;
   if ($("orbitSweep")) { $("orbitSweep").value = 360; $("orbitSweepVal").textContent = "360°"; }
-  pushUndo();
-  buildOrbitTrack({ entityId: lockedTargetId() }, 360, S.orbitDir, S.orbitRadius);
+  pushUndo(); buildOrbitTrack({ entityId: lockedTargetId() }, 360, S.orbitDir, S.orbitRadius);
 };
 if ($("quickOrbit180")) $("quickOrbit180").onclick = () => {
   if (!S.scene) return;
   S.orbitSweep = 180;
   if ($("orbitSweep")) { $("orbitSweep").value = 180; $("orbitSweepVal").textContent = "180°"; }
-  pushUndo();
-  buildOrbitTrack({ entityId: lockedTargetId() }, 180, S.orbitDir, S.orbitRadius);
+  pushUndo(); buildOrbitTrack({ entityId: lockedTargetId() }, 180, S.orbitDir, S.orbitRadius);
 };
 if ($("quickDollyIn")) $("quickDollyIn").onclick = () => buildPushInTrack();
 if ($("quickFlipDir")) $("quickFlipDir").onclick = () => {
   S.orbitDir *= -1;
   $("quickFlipDir").textContent = S.orbitDir > 0 ? "CCW ↺" : "CW ↻";
-  if (S.lastOrbitAnchor && S.scene) {
-    pushUndo();
-    buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius);
-  }
+  if (S.lastOrbitAnchor && S.scene) { pushUndo(); buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius); }
 };
 if ($("orbitSweep")) $("orbitSweep").oninput = (e) => {
   S.orbitSweep = parseInt(e.target.value, 10);
   $("orbitSweepVal").textContent = `${S.orbitSweep}°`;
-  if (S.lastOrbitAnchor && S.scene) {
-    buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius);
-  }
+  if (S.lastOrbitAnchor && S.scene) buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius);
 };
 if ($("orbitRadius")) $("orbitRadius").oninput = (e) => {
   S.orbitRadius = parseFloat(e.target.value);
   $("orbitRadiusVal").textContent = `${S.orbitRadius.toFixed(1)}u`;
-  if (S.lastOrbitAnchor && S.scene) {
-    buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius);
-  }
+  if (S.lastOrbitAnchor && S.scene) buildOrbitTrack(S.lastOrbitAnchor, S.orbitSweep, S.orbitDir, S.orbitRadius);
 };
 if ($("aimTarget")) $("aimTarget").onchange = () => {
-  if (S.lastOrbitAnchor && S.scene) {
-    pushUndo();
-    buildOrbitTrack({ entityId: lockedTargetId() }, S.orbitSweep, S.orbitDir, S.orbitRadius);
-  }
+  if (S.lastOrbitAnchor && S.scene) { pushUndo(); buildOrbitTrack({ entityId: lockedTargetId() }, S.orbitSweep, S.orbitDir, S.orbitRadius); }
+  else if ($("autoAim")?.checked && S.scene) { bakeCameraCurve(); }
 };
-if ($("addKeyBtn")) $("addKeyBtn").onclick = () => {
-  if (!S.scene) return;
-  const c = camAt(S.scene, S.t);
-  addKeyframeAt(c.x, c.y, S.t);
-};
+if ($("autoAim")) $("autoAim").onchange = () => { if (S.scene) bakeCameraCurve(); };
+if ($("addKeyBtn")) $("addKeyBtn").onclick = () => { if (S.scene) { const c = camAt(S.scene, S.t); addKeyframeAt(c.x, c.y, S.t); } };
 if ($("delKeyBtn")) $("delKeyBtn").onclick = deleteSelectedKey;
 if ($("undoBtn")) $("undoBtn").onclick = doUndo;
 if ($("redoBtn")) $("redoBtn").onclick = doRedo;
 
 window.addEventListener("keydown", (e) => {
   if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
-    e.preventDefault();
-    e.shiftKey ? doRedo() : doUndo();
-  } else if ((e.key === "Delete" || e.key === "Backspace") && S.sel.cam != null) {
-    e.preventDefault();
-    deleteSelectedKey();
-  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
+  else if ((e.key === "Delete" || e.key === "Backspace") && S.sel.cam != null) { e.preventDefault(); deleteSelectedKey(); }
 });
 
 // ------------------------------------------------------------------ map drawing
@@ -645,7 +867,7 @@ function fitView(scene) {
   let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
   for (const [x, y] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
   if (!isFinite(x0)) [x0, x1, y0, y1] = [-5, 5, 0, 10];
-  const mx = Math.max(1.4, (x1 - x0) * 0.16), my = Math.max(1.4, (y1 - y0) * 0.16);
+  const mx = Math.max(1.5, (x1 - x0) * 0.17), my = Math.max(1.5, (y1 - y0) * 0.17);
   x0 -= mx; x1 += mx; y0 -= my; y1 += my;
   const W = canvas.width, H = canvas.height, s = Math.min(W / (x1 - x0), H / (y1 - y0));
   const ox = (W - s * (x1 - x0)) / 2, oy = (H - s * (y1 - y0)) / 2;
@@ -660,6 +882,7 @@ function resize() {
 window.addEventListener("resize", resize);
 
 const lowConfAt = (id, t) => (S.scene.low_confidence || []).some((l) => l.entity_id === id && t >= l.t0 && t <= l.t1);
+const liveAimHandle = (cam) => { const f = fwdVec(cam.yaw); return S.view.toPx(cam.x + f[0] * 1.45, cam.y + f[1] * 1.45); };
 
 function draw() {
   const sc = S.scene; if (!sc) return;
@@ -667,20 +890,18 @@ function draw() {
   const V = S.view, P = V.toPx, dpr = window.devicePixelRatio || 1;
   ctx.fillStyle = COLORS.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Blueprint dual-density grid (0.5u minor, 1.0u major)
+  // Blueprint dual-density grid
   ctx.lineWidth = 1;
   for (let x = Math.ceil(V.x0 * 2) / 2; x <= V.x1; x += 0.5) {
-    const major = Math.abs(x - Math.round(x)) < 1e-4;
-    ctx.strokeStyle = major ? COLORS.gridMajor : COLORS.gridMinor;
+    ctx.strokeStyle = Math.abs(x - Math.round(x)) < 1e-4 ? COLORS.gridMajor : COLORS.gridMinor;
     line(P(x, V.y0), P(x, V.y1));
   }
   for (let y = Math.ceil(V.y0 * 2) / 2; y <= V.y1; y += 0.5) {
-    const major = Math.abs(y - Math.round(y)) < 1e-4;
-    ctx.strokeStyle = major ? COLORS.gridMajor : COLORS.gridMinor;
+    ctx.strokeStyle = Math.abs(y - Math.round(y)) < 1e-4 ? COLORS.gridMajor : COLORS.gridMinor;
     line(P(V.x0, y), P(V.x1, y));
   }
 
-  // Room outline with translucent floor
+  // Room floor + walls
   const room = sc.room.outline || [];
   if (room.length > 2) {
     const rPts = room.map((p) => P(...p));
@@ -688,8 +909,7 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(...rPts[0]);
     for (const p of rPts.slice(1)) ctx.lineTo(...p);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = COLORS.room; ctx.lineWidth = 1.75 * dpr;
-    ctx.stroke();
+    ctx.strokeStyle = COLORS.room; ctx.lineWidth = 1.75 * dpr; ctx.stroke();
   }
 
   // Objects
@@ -698,19 +918,18 @@ function draw() {
   // Ghost (original) camera path
   if (S.orig && JSON.stringify(S.orig.camera.track) !== JSON.stringify(sc.camera.track)) {
     ctx.save();
-    ctx.setLineDash([6 * dpr, 6 * dpr]); ctx.strokeStyle = COLORS.ghost; ctx.lineWidth = 1.8 * dpr;
+    ctx.setLineDash([6 * dpr, 6 * dpr]); ctx.strokeStyle = COLORS.ghost; ctx.lineWidth = 1.6 * dpr;
     poly(sortedKeys(S.orig.camera.track).map((k) => P(k.x, k.y)));
     ctx.restore();
   }
 
-  // Active camera path + directional chevrons
-  const camKeys = sortedKeys(sc.camera.track);
-  const camPx = camKeys.map((k) => P(k.x, k.y));
-  ctx.strokeStyle = COLORS.camDim; ctx.lineWidth = 2.4 * dpr;
+  // Smooth curved camera path + directional chevrons
+  const camPx = sortedKeys(sc.camera.track).map((k) => P(k.x, k.y));
+  ctx.strokeStyle = COLORS.camDim; ctx.lineWidth = 2.6 * dpr;
   poly(camPx);
   drawPathArrows(camPx, dpr);
 
-  // Look-At target reticle & sightline
+  // Look-At sightline & reticle
   const autoAimOn = $("autoAim")?.checked;
   const aimPos = autoAimOn ? entityPosAt(sc, lockedTargetId(), S.t) : null;
   const cam = camAt(sc, S.t);
@@ -718,44 +937,42 @@ function draw() {
   if (aimPos) {
     const [ax, ay] = P(aimPos.x, aimPos.y);
     ctx.save();
-    ctx.setLineDash([4 * dpr, 5 * dpr]);
-    ctx.strokeStyle = "rgba(79,158,255,0.45)";
-    ctx.lineWidth = 1.3 * dpr;
+    ctx.setLineDash([4 * dpr, 5 * dpr]); ctx.strokeStyle = "rgba(79,158,255,0.45)"; ctx.lineWidth = 1.3 * dpr;
     line([cx, cy], [ax, ay]);
-    ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(79,158,255,0.85)";
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.beginPath(); ctx.arc(ax, ay, Math.max(15 * dpr, 0.45 * V.s), 0, 2 * Math.PI); ctx.stroke();
+    ctx.setLineDash([]); ctx.strokeStyle = "rgba(79,158,255,0.85)"; ctx.lineWidth = 1.6 * dpr;
+    ctx.beginPath(); ctx.arc(ax, ay, Math.max(16 * dpr, 0.46 * V.s), 0, 2 * Math.PI); ctx.stroke();
     ctx.restore();
   }
 
-  // Actors
+  // Actors (curved/motion trails + draggable body)
   for (const a of sc.actors) drawActor(a, P, V.s, dpr);
 
-  // Camera keyframes
-  camKeys.forEach((k, i) => {
+  // Editable camera control waypoints (clean diamonds matching the timeline!)
+  S.waypoints.forEach((k, i) => {
     const [px, py] = P(k.x, k.y);
     const isSel = i === S.sel.cam;
-    const isHov = S.hover?.kind === "cam" && S.hover.index === i;
+    const isHov = S.hover?.kind === "cam_wp" && S.hover.index === i;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(Math.PI / 4);
+    const sz = (isSel || isHov ? 6.5 : 4.8) * dpr;
     if (isSel || isHov) {
-      ctx.fillStyle = "rgba(62,232,139,0.22)";
-      dot(px, py, 10 * dpr);
+      ctx.fillStyle = "rgba(62,232,139,0.28)";
+      ctx.fillRect(-sz * 1.6, -sz * 1.6, sz * 3.2, sz * 3.2);
     }
     ctx.fillStyle = isSel ? "#ffffff" : COLORS.cam;
-    dot(px, py, (isSel ? 5.5 : (i === 0 || i === camKeys.length - 1 ? 4.8 : 3.5)) * dpr);
+    ctx.strokeStyle = "#090b10"; ctx.lineWidth = 1.5 * dpr;
+    ctx.fillRect(-sz, -sz, sz * 2, sz * 2);
+    ctx.strokeRect(-sz, -sz, sz * 2, sz * 2);
+    ctx.restore();
   });
 
-  // Start badge on first keyframe if path moves
-  if (camPx.length > 1) {
-    pillLabel("START", camPx[0][0], camPx[0][1] + 15 * dpr, dpr, "#3ee88b");
-  }
+  if (camPx.length > 1) pillLabel("START", camPx[0][0], camPx[0][1] + 15 * dpr, dpr, "#3ee88b");
 
-  // Camera now + gradient FOV cone + cinema camera icon
-  const hf = sc.camera.hfov_deg, len = 4.2;
-  const low = lowConfAt("camera", S.t);
+  // Camera FOV cone
+  const hf = sc.camera.hfov_deg, len = 4.2, low = lowConfAt("camera", S.t);
   const l = fwdVec(cam.yaw + hf / 2), r = fwdVec(cam.yaw - hf / 2), f = fwdVec(cam.yaw);
-  const pL = P(cam.x + l[0] * len, cam.y + l[1] * len);
-  const pR = P(cam.x + r[0] * len, cam.y + r[1] * len);
+  const pL = P(cam.x + l[0] * len, cam.y + l[1] * len), pR = P(cam.x + r[0] * len, cam.y + r[1] * len);
   const pMid = P(cam.x + f[0] * len, cam.y + f[1] * len);
   const grad = ctx.createLinearGradient(cx, cy, pMid[0], pMid[1]);
   grad.addColorStop(0, `rgba(62,232,139,${low ? 0.16 : 0.34})`);
@@ -765,91 +982,84 @@ function draw() {
   ctx.strokeStyle = `rgba(62,232,139,${low ? 0.25 : 0.45})`; ctx.lineWidth = 1.1 * dpr;
   line([cx, cy], pL); line([cx, cy], pR);
 
-  // Rotated camera body + lens barrel
+  // Always-visible Live Lens Aim Handle right in front of the camera!
+  const aimH = liveAimHandle(cam);
+  const aimHov = S.hover?.kind === "cam_aim" || S.drag?.kind === "cam_aim";
+  ctx.strokeStyle = aimHov ? "#ffffff" : "rgba(255,255,255,0.75)";
+  ctx.lineWidth = (aimHov ? 2.2 : 1.5) * dpr;
+  line([cx, cy], aimH);
+  ctx.fillStyle = aimHov ? "#ffffff" : "rgba(11,14,20,0.85)";
+  ctx.beginPath(); ctx.arc(aimH[0], aimH[1], (aimHov ? 7.5 : 6) * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+
+  // Directly draggable Live Camera Body (with subtle halo on hover)
+  const bodyHov = S.hover?.kind === "cam_live" || S.drag?.kind === "cam_live";
+  if (bodyHov) {
+    ctx.strokeStyle = "rgba(62,232,139,0.7)"; ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.arc(cx, cy, 17 * dpr, 0, 2 * Math.PI); ctx.stroke();
+  }
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(-rad(cam.yaw));
-  ctx.fillStyle = COLORS.cam;
-  roundRect(-8 * dpr, -6 * dpr, 16 * dpr, 13 * dpr, 3.5 * dpr);
-  ctx.fillStyle = "#b8fbd4";
+  ctx.fillStyle = bodyHov ? "#6ef5a9" : COLORS.cam;
+  roundRect(-9 * dpr, -7 * dpr, 18 * dpr, 14 * dpr, 4 * dpr);
+  ctx.fillStyle = "#d4ffe7";
   ctx.beginPath();
-  ctx.moveTo(-4 * dpr, -6 * dpr); ctx.lineTo(4 * dpr, -6 * dpr);
-  ctx.lineTo(6.5 * dpr, -12 * dpr); ctx.lineTo(-6.5 * dpr, -12 * dpr);
+  ctx.moveTo(-4.5 * dpr, -7 * dpr); ctx.lineTo(4.5 * dpr, -7 * dpr);
+  ctx.lineTo(7 * dpr, -13 * dpr); ctx.lineTo(-7 * dpr, -13 * dpr);
   ctx.closePath(); ctx.fill();
   ctx.restore();
 
-  // Yaw handle for the selected camera key
-  if (S.sel.cam != null) {
-    const k = camKeys[S.sel.cam];
-    if (k) {
-      const h = yawHandle(k);
-      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.6 * dpr;
-      line(P(k.x, k.y), h);
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.beginPath(); ctx.arc(h[0], h[1], 7.5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
-    }
-  }
-
-  // Live Freehand Draw preview ribbon
+  // Freehand Draw preview
   if (S.drawStroke && S.drawStroke.length > 1) {
     const dPts = S.drawStroke.map((pt) => P(pt[0], pt[1]));
     ctx.save();
     ctx.strokeStyle = "#4f9eff"; ctx.lineWidth = 3.2 * dpr; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    poly(dPts);
-    drawPathArrows(dPts, dpr, "#93c5fd");
+    poly(dPts); drawPathArrows(dPts, dpr, "#93c5fd");
     ctx.restore();
   }
 
-  // Live Orbit Ring sculpting preview
+  // Orbit Ring sculpting preview
   if (S.orbitDraft) {
     const { cx: ox, cy: oy, r } = S.orbitDraft;
     const [opx, opy] = P(ox, oy);
     const rPx = Math.max(12 * dpr, r * V.s);
     ctx.save();
-    ctx.strokeStyle = "#3ee88b"; ctx.lineWidth = 2.2 * dpr;
-    ctx.setLineDash([7 * dpr, 5 * dpr]);
+    ctx.strokeStyle = "#3ee88b"; ctx.lineWidth = 2.2 * dpr; ctx.setLineDash([7 * dpr, 5 * dpr]);
     ctx.beginPath(); ctx.arc(opx, opy, rPx, 0, 2 * Math.PI); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(62,232,139,0.07)";
+    ctx.setLineDash([]); ctx.fillStyle = "rgba(62,232,139,0.07)";
     ctx.beginPath(); ctx.arc(opx, opy, rPx, 0, 2 * Math.PI); ctx.fill();
     pillLabel(`${S.orbitSweep}° ${S.orbitDir > 0 ? "CCW" : "CW"} · R=${r.toFixed(1)}u`, opx, opy - rPx - 12 * dpr, dpr, "#3ee88b");
     ctx.restore();
   }
 }
 
-function drawPathArrows(pts, dpr, color = "rgba(169,247,203,0.8)") {
+function drawPathArrows(pts, dpr, color = "rgba(169,247,203,0.85)") {
   if (pts.length < 2) return;
-  let accum = 0;
-  const step = 62 * dpr;
-  ctx.fillStyle = color;
+  let accum = 0; const step = 62 * dpr; ctx.fillStyle = color;
   for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
-    const seg = Math.hypot(dx, dy);
+    const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1], seg = Math.hypot(dx, dy);
     if (seg < 2) continue;
     accum += seg;
     if (accum >= step) {
       accum = 0;
-      const mx = (pts[i][0] + pts[i - 1][0]) / 2, my = (pts[i][1] + pts[i - 1][1]) / 2;
-      const ang = Math.atan2(dy, dx);
+      const mx = (pts[i][0] + pts[i - 1][0]) / 2, my = (pts[i][1] + pts[i - 1][1]) / 2, ang = Math.atan2(dy, dx);
       ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
-      ctx.beginPath();
-      ctx.moveTo(5 * dpr, 0); ctx.lineTo(-4 * dpr, -3.5 * dpr); ctx.lineTo(-4 * dpr, 3.5 * dpr);
-      ctx.closePath(); ctx.fill();
-      ctx.restore();
+      ctx.beginPath(); ctx.moveTo(5 * dpr, 0); ctx.lineTo(-4 * dpr, -3.5 * dpr); ctx.lineTo(-4 * dpr, 3.5 * dpr);
+      ctx.closePath(); ctx.fill(); ctx.restore();
     }
   }
 }
 
 function drawObject(o, P, s, dpr) {
-  const [px, py] = P(...o.center), w = o.size[0] * s, h = o.size[1] * s;
-  const low = lowConfAt(o.id, S.t);
+  const [px, py] = P(...o.center), w = o.size[0] * s, h = o.size[1] * s, low = lowConfAt(o.id, S.t);
+  const hov = S.hover?.kind === "obj" && S.hover.id === o.id;
   ctx.save(); ctx.translate(px, py); ctx.rotate(-rad(o.rotation_deg || 0));
   ctx.globalAlpha = low ? 0.45 : 0.85; ctx.fillStyle = o.color || "#64748b";
   if (o.shape === "circle") { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, 2 * Math.PI); ctx.fill(); }
   else {
-    const rw = Math.max(w, 4), rh = Math.max(h, 4);
+    const rw = Math.max(w, 6), rh = Math.max(h, 6);
     ctx.fillRect(-rw / 2, -rh / 2, rw, rh);
-    ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = hov ? "#ffffff" : "rgba(255,255,255,0.22)"; ctx.lineWidth = (hov ? 2 : 1) * dpr;
     ctx.strokeRect(-rw / 2, -rh / 2, rw, rh);
   }
   ctx.restore(); ctx.globalAlpha = 1;
@@ -858,58 +1068,104 @@ function drawObject(o, P, s, dpr) {
 
 function drawActor(a, P, s, dpr) {
   const keys = sortedKeys(a.track);
-  ctx.strokeStyle = (a.color || "#f87171") + "55"; ctx.lineWidth = 2 * dpr;
-  poly(keys.map((k) => P(k.x, k.y)));
-  ctx.fillStyle = (a.color || "#f87171") + "aa";
-  for (const k of keys) { const [x, y] = P(k.x, k.y); dot(x, y, 2.8 * dpr); }
+  const aPts = keys.map((k) => P(k.x, k.y));
+  ctx.strokeStyle = (a.color || "#f87171") + "66"; ctx.lineWidth = 2 * dpr;
+  poly(aPts);
+  drawPathArrows(aPts, dpr, (a.color || "#f87171") + "aa");
+  ctx.fillStyle = (a.color || "#f87171") + "cc";
+  for (const k of keys) { const [x, y] = P(k.x, k.y); dot(x, y, 3.2 * dpr); }
   const now = actorAt(a, S.t); if (!now.visible) return;
   const [px, py] = P(now.x, now.y), low = lowConfAt(a.id, S.t), f = fwdVec(now.facing);
+  const hov = (S.hover?.kind === "actor_live" && S.hover.id === a.id) || (S.drag?.kind === "actor_live" && S.drag.id === a.id);
+  if (hov) {
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.arc(px, py, Math.max(18 * dpr, 0.48 * s), 0, 2 * Math.PI); ctx.stroke();
+  }
   ctx.save(); ctx.translate(px, py); ctx.rotate(-rad(now.facing));
   ctx.globalAlpha = low ? 0.5 : 1; ctx.fillStyle = a.color || "#f87171";
-  ctx.beginPath(); ctx.ellipse(0, 0, 0.34 * s, 0.17 * s, 0, 0, 2 * Math.PI); ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.45)"; ctx.lineWidth = 1.2 * dpr; ctx.stroke();
-  ctx.fillStyle = "#f5d0b0"; ctx.beginPath(); ctx.arc(0, 0, 0.12 * s, 0, 2 * Math.PI); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 0, Math.max(12 * dpr, 0.36 * s), Math.max(6 * dpr, 0.18 * s), 0, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = 1.4 * dpr; ctx.stroke();
+  ctx.fillStyle = "#f5d0b0"; ctx.beginPath(); ctx.arc(0, 0, Math.max(5 * dpr, 0.13 * s), 0, 2 * Math.PI); ctx.fill();
   ctx.restore(); ctx.globalAlpha = 1;
-  ctx.strokeStyle = a.color || "#f87171"; ctx.lineWidth = 1.8 * dpr;
-  line([px, py], P(now.x + f[0] * 0.55, now.y + f[1] * 0.55));
-  pillLabel(`${a.id}${low ? " ?" : ""}`, px, py - 0.42 * s - 10 * dpr, dpr, low ? "#f5bf4f" : "#f8fafc");
+  ctx.strokeStyle = a.color || "#f87171"; ctx.lineWidth = 2 * dpr;
+  line([px, py], P(now.x + f[0] * 0.6, now.y + f[1] * 0.6));
+  pillLabel(`${a.id}${low ? " ?" : ""}`, px, py - Math.max(16 * dpr, 0.44 * s) - 9 * dpr, dpr, low ? "#f5bf4f" : "#f8fafc");
 }
 
 function pillLabel(text, x, y, dpr, color) {
   ctx.save();
   ctx.font = `600 ${10.5 * dpr}px -apple-system, system-ui, sans-serif`;
   const w = ctx.measureText(text).width + 10 * dpr, h = 16 * dpr;
-  ctx.fillStyle = "rgba(9,11,16,0.78)";
+  ctx.fillStyle = "rgba(9,11,16,0.8)";
   roundRect(x - w / 2, y - h / 2, w, h, 5 * dpr);
   ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(text, x, y + 0.5 * dpr);
   ctx.restore();
 }
 
-const yawHandle = (k) => { const f = fwdVec(k.yaw_deg); return S.view.toPx(k.x + f[0] * 1.2, k.y + f[1] * 1.2); };
 function line(a, b) { ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
 function poly(pts, close = false) { if (pts.length < 2) return; ctx.beginPath(); ctx.moveTo(...pts[0]);
   for (const p of pts.slice(1)) ctx.lineTo(...p); if (close) ctx.closePath(); ctx.stroke(); }
 function dot(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill(); }
 function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill(); }
 
-// ------------------------------------------------------------------ map interaction (select / draw / orbit)
+// ------------------------------------------------------------------ direct video-editor hit testing & dragging
 function hit(px, py) {
   if (!S.view || !S.scene) return null;
-  const dpr = window.devicePixelRatio || 1, R = 11 * dpr, P = S.view.toPx, sc = S.scene;
-  const near = (x, y) => Math.hypot(px - x, py - y) < R;
-  if (S.sel.cam != null) { const k = sortedKeys(sc.camera.track)[S.sel.cam];
-    if (k && near(...yawHandle(k))) return { kind: "yaw", index: S.sel.cam }; }
-  const ck = sortedKeys(sc.camera.track);
-  for (let i = 0; i < ck.length; i++) if (near(...P(ck[i].x, ck[i].y))) return { kind: "cam", index: i };
-  for (const a of sc.actors) { const ks = sortedKeys(a.track);
-    for (let i = 0; i < ks.length; i++) if (near(...P(ks[i].x, ks[i].y))) return { kind: "actor", id: a.id, index: i }; }
-  for (const o of sc.objects) { const [x, y] = P(...o.center);
-    if (Math.hypot(px - x, py - y) < Math.max(R, (Math.max(...o.size) * S.view.s) / 2)) return { kind: "obj", id: o.id }; }
+  const dpr = window.devicePixelRatio || 1, R = 13 * dpr, P = S.view.toPx, sc = S.scene;
+  const near = (x, y, r = R) => Math.hypot(px - x, py - y) < r;
+
+  // 1. Live Lens Aim Handle (always easy to grab!)
+  const cam = camAt(sc, S.t);
+  if (near(...liveAimHandle(cam), 13 * dpr)) return { kind: "cam_aim" };
+
+  // 2. Live Camera Body (auto-keyframe at current time S.t!)
+  if (near(...P(cam.x, cam.y), 18 * dpr)) return { kind: "cam_live" };
+
+  // 3. Camera control waypoints (diamonds)
+  for (let i = 0; i < S.waypoints.length; i++) {
+    if (near(...P(S.waypoints[i].x, S.waypoints[i].y), 12 * dpr)) return { kind: "cam_wp", index: i };
+  }
+
+  // 4. Live Actor Bodies (grab any actor directly!)
+  for (const a of sc.actors) {
+    const p = actorAt(a, S.t);
+    if (p.visible && near(...P(p.x, p.y), Math.max(18 * dpr, 0.42 * S.view.s))) {
+      return { kind: "actor_live", id: a.id };
+    }
+  }
+
+  // 5. Actor key dots
+  for (const a of sc.actors) {
+    const ks = sortedKeys(a.track);
+    for (let i = 0; i < ks.length; i++) if (near(...P(ks[i].x, ks[i].y), 10 * dpr)) return { kind: "actor_key", id: a.id, index: i };
+  }
+
+  // 6. Props / objects
+  for (const o of sc.objects) {
+    const [x, y] = P(...o.center);
+    if (Math.hypot(px - x, py - y) < Math.max(R, (Math.max(...o.size) * S.view.s) / 2)) return { kind: "obj", id: o.id };
+  }
   return null;
 }
+
+function hoverHelpText(h) {
+  if (!h) return "";
+  if (h.kind === "cam_live") return `Drag camera to move @ ${S.t.toFixed(1)}s (auto-keyframe + smooth curve)`;
+  if (h.kind === "cam_aim") return `Drag lens handle to rotate camera aim @ ${S.t.toFixed(1)}s`;
+  if (h.kind === "cam_wp") return `Drag diamond #${h.index + 1} (${S.waypoints[h.index]?.t.toFixed(1)}s) to bend camera curve`;
+  if (h.kind === "actor_live") {
+    return S.actorDragMode === "all"
+      ? `Drag ${h.id} to reposition across the whole shot`
+      : `Drag ${h.id} to animate position @ ${S.t.toFixed(1)}s`;
+  }
+  if (h.kind === "actor_key") return `Drag ${h.id} waypoint #${h.index + 1}`;
+  if (h.kind === "obj") return `Drag prop ${h.id} to move placement`;
+  return "";
+}
+
 function nearestEntityAtWorld(wx, wy) {
-  let best = null, bestD = 1.2;
+  let best = null, bestD = 1.4;
   for (const a of S.scene.actors) {
     const p = actorAt(a, S.t), d = Math.hypot(wx - p.x, wy - p.y);
     if (d < bestD) { bestD = d; best = { entityId: a.id, cx: p.x, cy: p.y }; }
@@ -923,34 +1179,72 @@ function nearestEntityAtWorld(wx, wy) {
 function evPx(ev) { const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
   return [(ev.clientX - r.left) * dpr, (ev.clientY - r.top) * dpr]; }
 
+function ensureCamWaypointAt(t) {
+  const nearIdx = S.waypoints.findIndex((k) => Math.abs(k.t - t) < 0.35);
+  if (nearIdx >= 0) return nearIdx;
+  const c = camAt(S.scene, t);
+  const nk = { t: roundN(t, 3), mmss: mmss(t), x: roundN(c.x, 4), y: roundN(c.y, 4), yaw_deg: roundN(c.yaw, 3) };
+  S.waypoints.push(nk);
+  S.waypoints = sortedKeys(S.waypoints);
+  return S.waypoints.findIndex((k) => k.t === nk.t);
+}
+
 canvas.addEventListener("pointerdown", (ev) => {
   if (!S.scene || !S.view) return;
   const px = evPx(ev), [wx, wy] = S.view.toWorld(...px);
 
-  if (S.tool === "draw") {
-    S.drawStroke = [[wx, wy]];
-    canvas.setPointerCapture(ev.pointerId);
-    return;
-  }
+  if (S.tool === "draw") { S.drawStroke = [[wx, wy]]; canvas.setPointerCapture(ev.pointerId); return; }
   if (S.tool === "orbit") {
     const snapped = nearestEntityAtWorld(wx, wy);
     S.orbitDraft = snapped
-      ? { entityId: snapped.entityId, cx: snapped.cx, cy: snapped.cy, r: 1.5 }
-      : { entityId: null, cx: wx, cy: wy, r: 1.5 };
+      ? { entityId: snapped.entityId, cx: snapped.cx, cy: snapped.cy, r: 1.6 }
+      : { entityId: null, cx: wx, cy: wy, r: 1.6 };
     canvas.setPointerCapture(ev.pointerId);
     return;
   }
 
   const h = hit(...px);
-  if (h?.kind === "cam") { S.sel.cam = h.index; seek(sortedKeys(S.scene.camera.track)[h.index].t); }
-  else if (!h) S.sel.cam = null;
-  if (h) {
-    pushUndo();
+  if (!h) { S.sel.cam = null; S.sel.actor = null; syncHistoryButtons(); return; }
+
+  pushUndo();
+  S.lastOrbitAnchor = null;
+  if (h.kind === "cam_live") {
+    const idx = ensureCamWaypointAt(S.t);
+    S.sel.cam = idx;
+    S.drag = { kind: "cam_wp", index: idx };
+  } else if (h.kind === "cam_aim") {
+    const idx = ensureCamWaypointAt(S.t);
+    S.sel.cam = idx;
+    S.drag = { kind: "cam_aim", index: idx };
+  } else if (h.kind === "cam_wp") {
+    S.sel.cam = h.index;
+    seek(S.waypoints[h.index].t);
     S.drag = h;
-    S.lastOrbitAnchor = null;
-    canvas.setPointerCapture(ev.pointerId);
-    canvas.style.cursor = "grabbing";
+  } else if (h.kind === "actor_live") {
+    const a = S.scene.actors.find((x) => x.id === h.id);
+    if (S.actorDragMode === "all") {
+      const p = actorAt(a, S.t);
+      S.drag = { kind: "actor_all", id: a.id, startX: wx, startY: wy, origTrack: clone(a.track), base: p };
+    } else {
+      a.track = sortedKeys(a.track);
+      let idx = a.track.findIndex((k) => Math.abs(k.t - S.t) < 0.3);
+      if (idx < 0) {
+        const p = actorAt(a, S.t);
+        const nk = { t: roundN(S.t, 3), mmss: mmss(S.t), x: roundN(p.x, 3), y: roundN(p.y, 3), facing_deg: roundN(p.facing, 2), visible: true };
+        a.track.push(nk); a.track = sortedKeys(a.track);
+        idx = a.track.findIndex((k) => k.t === nk.t);
+      }
+      S.sel.actor = { id: a.id, index: idx };
+      S.drag = { kind: "actor_key", id: a.id, index: idx };
+    }
+  } else if (h.kind === "actor_key") {
+    S.sel.actor = { id: h.id, index: h.index };
+    S.drag = h;
+  } else if (h.kind === "obj") {
+    S.drag = h;
   }
+  canvas.setPointerCapture(ev.pointerId);
+  canvas.style.cursor = "grabbing";
   syncHistoryButtons();
 });
 
@@ -971,26 +1265,34 @@ canvas.addEventListener("pointermove", (ev) => {
     if (S.tool === "select") {
       S.hover = hit(...px);
       canvas.style.cursor = S.hover ? "grab" : "default";
+      if ($("hoverTip")) $("hoverTip").textContent = hoverHelpText(S.hover);
     }
     return;
   }
   const d = S.drag, sc = S.scene, r = (v) => Math.round(v * 100) / 100;
-  if (d.kind === "cam") {
-    sc.camera.track = sortedKeys(sc.camera.track);
-    const k = sc.camera.track[d.index];
+  if (d.kind === "cam_wp") {
+    const k = S.waypoints[d.index];
     k.x = r(wx); k.y = r(wy);
     if ($("autoAim")?.checked) {
       const tgt = entityPosAt(sc, lockedTargetId(), k.t);
       if (tgt) k.yaw_deg = r(yawTowards(k.x, k.y, tgt.x, tgt.y));
     }
-  } else if (d.kind === "yaw") {
-    sc.camera.track = sortedKeys(sc.camera.track);
-    const k = sc.camera.track[d.index];
+    bakeCameraCurve();
+  } else if (d.kind === "cam_aim") {
+    if ($("autoAim")?.checked) $("autoAim").checked = false;
+    const k = S.waypoints[d.index];
     k.yaw_deg = r(yawTowards(k.x, k.y, wx, wy));
-  } else if (d.kind === "actor") {
+    bakeCameraCurve();
+  } else if (d.kind === "actor_key") {
     const a = sc.actors.find((x) => x.id === d.id);
     a.track = sortedKeys(a.track);
     Object.assign(a.track[d.index], { x: r(wx), y: r(wy) });
+    if ($("autoAim")?.checked) bakeCameraCurve();
+  } else if (d.kind === "actor_all") {
+    const a = sc.actors.find((x) => x.id === d.id);
+    const dx = wx - d.startX, dy = wy - d.startY;
+    a.track = d.origTrack.map((k) => ({ ...k, x: r(k.x + dx), y: r(k.y + dy) }));
+    if ($("autoAim")?.checked) bakeCameraCurve();
   } else if (d.kind === "obj") {
     sc.objects.find((o) => o.id === d.id).center = [r(wx), r(wy)];
   }
@@ -999,25 +1301,19 @@ canvas.addEventListener("pointermove", (ev) => {
 });
 
 canvas.addEventListener("pointerup", () => {
-  if (S.drawStroke) {
-    const stroke = S.drawStroke;
-    S.drawStroke = null;
-    commitDrawnStroke(stroke);
-    return;
-  }
+  if (S.drawStroke) { const stroke = S.drawStroke; S.drawStroke = null; commitDrawnStroke(stroke); return; }
   if (S.orbitDraft) {
-    const draft = S.orbitDraft;
-    S.orbitDraft = null;
-    pushUndo();
+    const draft = S.orbitDraft; S.orbitDraft = null; pushUndo();
     if (draft.entityId && $("aimTarget")) $("aimTarget").value = draft.entityId;
-    buildOrbitTrack(
-      draft.entityId ? { entityId: draft.entityId } : { x: draft.cx, y: draft.cy },
-      S.orbitSweep, S.orbitDir, draft.r,
-    );
+    buildOrbitTrack(draft.entityId ? { entityId: draft.entityId } : { x: draft.cx, y: draft.cy }, S.orbitSweep, S.orbitDir, draft.r);
     return;
   }
-  S.drag = null;
+  if (S.drag) { S.drag = null; syncHistoryButtons(); }
   if (S.tool === "select") canvas.style.cursor = S.hover ? "grab" : "default";
+});
+
+canvas.addEventListener("pointerleave", () => {
+  if (!S.drag && $("hoverTip")) $("hoverTip").textContent = "";
 });
 
 canvas.addEventListener("dblclick", (ev) => {
@@ -1027,7 +1323,7 @@ canvas.addEventListener("dblclick", (ev) => {
 });
 
 function markDirty(note) {
-  msg(note || "Edited on playground (not saved). Press Re-render Map & Reel or Re-shoot (Omni).");
+  msg(note || "Edited on motion stage (not saved). Press Re-render Map & Reel or Re-shoot (Omni).");
 }
 
 $("fov").oninput = (e) => {
@@ -1043,8 +1339,9 @@ $("applyPreset").onclick = async () => {
                  target: $("preset").value.startsWith("arc") ? $("target").value || null : null };
   try {
     pushUndo();
-    S.scene = (await post(`/api/run/${S.runId}/apply`, { scene: S.scene, edit })).scene; S.sel.cam = null;
-    S.lastOrbitAnchor = null; syncHistoryButtons(); markDirty(); seek(edit.t0); startMapPreview();
+    S.scene = (await post(`/api/run/${S.runId}/apply`, { scene: S.scene, edit })).scene;
+    S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
+    S.sel.cam = null; S.lastOrbitAnchor = null; syncHistoryButtons(); markDirty(); seek(edit.t0); startMapPreview();
   } catch (e) { S.undo.pop(); syncHistoryButtons(); msg(e.message, true); }
 };
 
@@ -1054,7 +1351,9 @@ async function saveAndRender(promise, label) {
   try {
     const res = await promise;
     S.scene = res.scene;
+    S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
     S.playing = false;
+    syncHistoryButtons();
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     if (res.reel_url) { setVideo(res.reel_url); msg(`Saved ${res.saved}; new reel in ${secs}s.`); }
     else if (res.map_url) { setVideo(res.map_url); msg(`Saved ${res.saved}; new map video in ${secs}s (no clip to stack).`); }
@@ -1069,7 +1368,9 @@ $("textEdit").onclick = () => {
 };
 $("reset").onclick = () => {
   pushUndo();
-  S.scene = clone(S.orig); S.sel.cam = null; S.lastOrbitAnchor = null; S.playing = false;
+  S.scene = clone(S.orig);
+  S.waypoints = extractWaypointsFromTrack(S.scene.camera.track, 9);
+  S.sel.cam = null; S.sel.actor = null; S.lastOrbitAnchor = null; S.playing = false;
   syncFovUI(); setVideo(S.run.reel_url || S.run.clip_url); syncHistoryButtons();
   msg("Back to the verified scene (edits on disk are kept).");
 };
