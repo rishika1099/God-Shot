@@ -99,9 +99,20 @@ def smoke() -> None:
 
 
 @app.command()
-def baseline(clip: str, o: str = typer.Option(..., "-o")) -> None:
+def baseline(
+    clip: str,
+    o: str = typer.Option(..., "-o", help="Output dir, e.g. out/<clip_id>"),
+    fps: int | None = typer.Option(None, "--fps", help="Video sampling fps (default GODSHOT_FPS)"),
+) -> None:
     """Single Argon call → scene_r0.json (S02)."""
-    raise NotImplementedError("S02")
+    from pathlib import Path
+
+    from godshot.extract import baseline as run_baseline
+
+    scene = run_baseline(Path(clip), Path(o), fps=fps)
+    n_keys = len(scene.camera.track)
+    counts = f"{len(scene.objects)} objects, {len(scene.actors)} actors, {n_keys} camera keys"
+    typer.echo(f"wrote {Path(o) / 'scene_r0.json'} ({counts})")
 
 
 @app.command()
