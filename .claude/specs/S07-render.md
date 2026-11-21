@@ -45,3 +45,10 @@
 - Auto-fit: the bounds of the room, object extents, camera + actor tracks (and the ghost camera path), plus 10% margin on each side, at least 1 unit across, fitted between the 72 px header and 28 px footer, with the aspect ratio kept.
 - Requires even `size` (yuv420p); odd sizes raise `ValueError`. ffmpeg missing → `RenderError`.
 - Not done: the stretch `MODEL_IMAGE` background (no image model verified yet). Hatch fill for low-confidence entities is a dashed outline only.
+- **Readability pass (2026-11-21), after watching reels of real Argon scenes:**
+  - **Full camera path, always visible:** a faint line (`CAM_PATH_ALPHA` 70) plus a ring at the start position, drawn in the static layer, so it costs nothing per frame. The viewer sees the whole move at a glance instead of decoding a 2 s trail.
+  - **Zoom to the action (deviation from "bounds of the room + all tracks"):** the fit is the camera + actor tracks (+ ghost) padded by 2.5 units. The room outline and objects are included only if that grows the area ≤ 2×. Measured: mock ratio 0.64 (room kept, same look as before); real Argon scenes 4.2–7.2 (the model invents rooms 20–30 units across, which shrank actors to dots). Minimum span is 3 units.
+  - **Actors never shrink below 30 px** across the shoulders on screen.
+  - **Labels:** `short_label` drops `actor_`/`obj_` prefixes (`actor_ironman` → `ironman`, but `actor_1` stays). A greedy `LabelPlacer` tries below/above/right/left and skips spots that overlap earlier labels (objects in the static layer, actors per frame).
+  - **Low-confidence camera:** the wedge is still at 40% opacity (spec) but now also gets a dashed amber outline, because the dimmed fill alone vanished on the dark map. Badges are bigger (r 16 px).
+  - Tests: 23 (bounds with an oversized room, labels, placer overlap, full path drawn at t=0). Speed still ≥ 60 fps (asserted).
