@@ -17,7 +17,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | todo |
 | S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | todo |
 | S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | todo |
-| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | todo |
+| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | in progress (script & deck outline drafted) |
 
 ## Notes
 - 2026-11-21: S04/S06 reassigned to Rishika; S05 stays with Siva.
