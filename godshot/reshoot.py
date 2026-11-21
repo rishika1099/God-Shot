@@ -793,8 +793,14 @@ def reshoot_best(
         out = out_dir / f"take_{k + 1}.mp4"
         try:
             return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
-        except OmniError as e:  # Omni fails intermittently with a generic INVALID_ARGUMENT; retry once
-            log.warning("take %d failed (%s); retrying once", k + 1, e)
+        except OmniError as e:  # generic INVALID_ARGUMENT, more often on long prompts: retry once, compact
+            log.warning("take %d failed (%s); retrying once with a compact prompt", k + 1, e)
+            if take_pack is not None:
+                from dataclasses import replace
+
+                from godshot import direct as direct_mod  # S14
+
+                take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
             return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
 
     def score(k: int, path: Path) -> dict[str, Any]:

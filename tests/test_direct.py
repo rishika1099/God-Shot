@@ -394,7 +394,12 @@ def test_critic_loop_adds_corrected_take(scene, fake_pipeline, monkeypatch, tmp_
 def test_failed_omni_take_is_retried_once(scene, fake_pipeline, tmp_path):
     fake_pipeline["fail_once"] = {0}
     r = reshoot.reshoot_best(Path("c.mp4"), scene, scene, tmp_path, n=1, direct=True)
-    assert r["best_take"] == 1 and 0 in fake_pipeline["packs"]
+    assert r["best_take"] == 1 and fake_pipeline["packs"][0].budget == direct.COMPACT_PROMPT_CHARS
+
+
+def test_compose_budget_from_pack():
+    pack = direct.Pack(BRIEF, DIRECTION, budget=len("BASE") + 5)
+    assert direct.compose("BASE", pack) == "BASE"
 
 
 def test_reshoot_best_default_unchanged(scene, monkeypatch, tmp_path):

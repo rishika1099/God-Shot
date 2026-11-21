@@ -47,8 +47,10 @@ MAX_SUCCESS = 6
 PRESERVE_FRAMES = (0.2, 0.5, 0.8)
 KEEP_P = 0.5
 MOVED_M = 0.3  # an entity moved if its position changed by more than this (room units ≈ m)
-# Omni accepted a 4.6k-char directed prompt (S14 probe); stay under it. Lower-priority sections drop first.
-MAX_PROMPT_CHARS = 4400
+# Omni fails intermittently (generic INVALID_ARGUMENT) on directed prompts of ~4.2k+ chars, while every
+# prompt ≤ ~3.2k passed (S14 probes). Lower-priority sections drop first; the retry uses the compact budget.
+MAX_PROMPT_CHARS = 3400
+COMPACT_PROMPT_CHARS = 2800
 
 
 # --------------------------------------------------------------------------- agent outputs
@@ -169,6 +171,7 @@ class Pack:
     spec: ChangeSpec | None = None
     request: str = ""
     corrections: list[str] = field(default_factory=list)  # critic rounds, oldest first
+    budget: int | None = None  # prompt length cap; None = MAX_PROMPT_CHARS
 
 
 # --------------------------------------------------------------------------- Gemini call (cached)
@@ -462,11 +465,12 @@ def compose(base: str, pack: Pack | tuple[SceneBrief, Direction]) -> str:
         (6, f"LIGHT AND ATMOSPHERE: {brief.environment}" if "environment" not in requested else ""),
         (7, f"SCENE: {brief.logline} {brief.intent}"),
     ]
+    budget = pack.budget or MAX_PROMPT_CHARS
     kept = [(p, s) for p, s in sections if s]
     prompt = ""
     while kept:
         prompt = "\n".join([base.rstrip(), *(s for _, s in sorted(kept))])
-        if len(prompt) <= MAX_PROMPT_CHARS:
+        if len(prompt) <= budget:
             break
         kept.remove(max(kept))  # drop the least important section
     else:
