@@ -159,7 +159,8 @@ def _run_payload(d: Path) -> dict[str, Any]:
         "reel_edit_url": _url(edit.with_name(edit.stem.replace("scene_", "reel_") + ".mp4"))
         if edit
         else None,
-        "reshoot_url": _url(d / "reshoot.mp4"),
+        "reshoot_url": _url(_latest(d, "reshoot") or d / "reshoot.mp4"),
+        "compare_url": _url(c) if (c := _latest(d, "compare")) else None,
         "clip_url": _url(clip) if clip else None,
     }
 
@@ -308,6 +309,30 @@ def text_edit_route(clip_id: str, body: TextEditBody) -> dict[str, Any]:
     return _save_edit(d, new, body.render)
 
 
+def _next_num(d: Path, stem: str) -> int:
+    nums = [
+        int(m.group(1)) for p in d.glob(f"{stem}_*.mp4") if (m := re.fullmatch(rf"{stem}_(\d+)\.mp4", p.name))
+    ]
+    return max(nums, default=0) + 1
+
+
+def _latest(d: Path, stem: str) -> Path | None:
+    n = _next_num(d, stem) - 1
+    return d / f"{stem}_{n}.mp4" if n > 0 else None
+
+
+def _compare(d: Path, clip: Path, reshoot_mp4: Path, edited: SceneV1, n: int) -> str | None:
+    """S08 compare layout: original | AI re-shoot on top, edited map (+ ghost) below. Best effort."""
+    try:
+        from godshot import compose, render
+
+        map_mp4 = render.render_map(edited, d / f"map_reshoot_{n}.mp4", ghost=_base_scene(d))
+        return _url(compose.compose_compare(clip, reshoot_mp4, map_mp4, d / f"compare_{n}.mp4"))
+    except Exception:
+        log.exception("compare video failed (the re-shoot itself is kept)")
+        return None
+
+
 @app.post("/api/run/{clip_id}/reshoot")
 def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
     """S12 hook: generate a re-shoot of the edited scene with Omni (background job)."""
@@ -318,14 +343,20 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
         raise HTTPException(404, "original clip not found (needed for reference frames)")
     edited = SceneV1.model_validate(body.scene) if body.scene else _base_scene(d)
 
+    n = _next_num(d, "reshoot")
+    edited.save(d / f"scene_reshoot_{n}.json")  # the exact map this take must follow
+
     def work(job: dict[str, Any]) -> None:
         from godshot import reshoot
 
         job["stage"] = "generating (Omni, ~30-90 s)"
-        out = reshoot.reshoot(clip, _base_scene(d), edited, d / "reshoot.mp4")
-        job["stage"] = "checking conformance"
-        job["conformance"] = reshoot.conformance(out, edited)
+        out = reshoot.reshoot(clip, _base_scene(d), edited, d / f"reshoot_{n}.mp4")
         job["reshoot_url"] = _url(out)
+        job["stage"] = "checking conformance vs the edited map"
+        conf = reshoot.conformance(out, edited)
+        job["conformance"] = {k: conf.get(k) for k in ("score", "hits", "usable")}
+        job["stage"] = "composing side-by-side"
+        job["compare_url"] = _compare(d, clip, out, edited, n)
 
     return {"job_id": _start_job("reshoot", clip_id, work)}
 

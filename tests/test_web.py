@@ -212,3 +212,67 @@ def test_loop_log_s06_bank_fields_map_to_pass_rate(client: TestClient, tmp_path:
     got = client.get("/api/run/mock_001").json()["loop_log"]
     assert [e["n_checks"] for e in got] == [60, 73, 10]
     assert got[1]["score_prev"] == 0.76  # original fields are preserved
+
+
+def test_reshoot_job_numbers_takes_scores_and_builds_compare(
+    client: TestClient, tmp_path: Path, fake_render: list[dict], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import compose, reshoot
+
+    d = tmp_path / "out" / "mock_001"
+    (d / "clip.mp4").write_bytes(b"clip")
+    seen: list[tuple] = []
+
+    def fake_reshoot(clip, scene_orig, scene_edited, out, **kw):
+        seen.append((Path(clip).name, Path(out).name, scene_edited.camera.hfov_deg))
+        Path(out).write_bytes(b"omni")
+        return Path(out)
+
+    def fake_conformance(video, scene_edited, work_dir=None):
+        return {"score": 0.9, "hits": 27, "usable": 30, "checks": [{"big": "list"}]}
+
+    def fake_compare(a, b, m, out):
+        seen.append(("compare", Path(a).name, Path(b).name, Path(m).name))
+        Path(out).write_bytes(b"cmp")
+        return Path(out)
+
+    monkeypatch.setattr(reshoot, "reshoot", fake_reshoot)
+    monkeypatch.setattr(reshoot, "conformance", fake_conformance)
+    monkeypatch.setattr(compose, "compose_compare", fake_compare)
+
+    scene = client.get("/api/run/mock_001").json()["scene"]
+    scene["camera"]["hfov_deg"] = 42
+    for take in (1, 2):
+        j = _wait(client, client.post("/api/run/mock_001/reshoot", json={"scene": scene}).json()["job_id"])
+        assert j["status"] == "done", j
+        assert j["conformance"] == {"score": 0.9, "hits": 27, "usable": 30}  # no bulky check list in the job
+        assert j["reshoot_url"].startswith(f"/out/mock_001/reshoot_{take}.mp4")
+        assert j["compare_url"].startswith(f"/out/mock_001/compare_{take}.mp4")
+        assert (d / f"scene_reshoot_{take}.json").exists()
+    assert seen[0] == ("clip.mp4", "reshoot_1.mp4", 42)
+    assert seen[1] == ("compare", "clip.mp4", "reshoot_1.mp4", "map_reshoot_1.mp4")
+    assert {"fn": "render_map", "out": "map_reshoot_1.mp4", "ghost": True} in fake_render
+    run = client.get("/api/run/mock_001").json()
+    assert run["reshoot_url"].startswith("/out/mock_001/reshoot_2.mp4")
+    assert run["compare_url"].startswith("/out/mock_001/compare_2.mp4")
+
+
+def test_reshoot_keeps_video_when_compare_fails(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import render, reshoot
+
+    (tmp_path / "out" / "mock_001" / "clip.mp4").write_bytes(b"clip")
+    monkeypatch.setattr(
+        reshoot, "reshoot", lambda c, o, e, out, **k: (Path(out).write_bytes(b"x"), Path(out))[1]
+    )
+    monkeypatch.setattr(
+        reshoot, "conformance", lambda v, e, work_dir=None: {"score": 0.5, "hits": 1, "usable": 2}
+    )
+
+    def boom(*a, **k):
+        raise render.RenderError("ffmpeg not found on PATH.")
+
+    monkeypatch.setattr(render, "render_map", boom)
+    j = _wait(client, client.post("/api/run/mock_001/reshoot", json={}).json()["job_id"])
+    assert j["status"] == "done" and j["compare_url"] is None and j["reshoot_url"]

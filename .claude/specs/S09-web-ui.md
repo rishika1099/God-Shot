@@ -75,5 +75,10 @@ A local web page to run the pipeline, watch the verify loop, view the reel, edit
     verdicts, loop_log). S06 writes `score_cand` / `bank_size` instead of the contract's `pass_rate` / `n_checks`
     (contracts.md "Run artifacts"), so `_loop_log()` maps them when the contract fields are missing. Remove once
     S06 writes the contract fields.
+  - 2026-11-21 S12 wiring (merged #15): Re-shoot saves the edited map as `scene_reshoot_N.json`, calls
+    `reshoot.reshoot(clip, scene_final, edited, out/<id>/reshoot_N.mp4)` (labelled, map-exact blockout mode),
+    then `reshoot.conformance(...)` (score / hits / usable only in the job, to keep polling light), then
+    best-effort S08 `compose_compare(original, reshoot, map_reshoot_N.mp4)` → `compare_N.mp4`, which the page
+    plays (falls back to the re-shoot alone if compare fails). Takes are numbered, never overwritten.
   - Still open: acceptance 1 (cached demo of 2 real runs with Wi-Fi off) needs 2 real S06 runs; acceptance 2
     (new reel < 30 s) needs S07/S08. Not yet checked in a real browser by a human.

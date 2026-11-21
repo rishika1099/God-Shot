@@ -404,8 +404,13 @@ function watchJob(id) {
       if (j.status !== "running") {
         clearInterval(S.jobTimer);
         if (j.status === "error") msg(`${j.kind} failed: ${j.error}`, true);
-        else if (j.kind === "reshoot") { setVideo(j.reshoot_url); msg(`Re-shoot ready. Conformance: ${
-          j.conformance?.score != null ? Math.round(j.conformance.score * 100) + "%" : "n/a"} (AI-generated)`); }
+        else if (j.kind === "reshoot") {
+          setVideo(j.compare_url || j.reshoot_url);
+          const c = j.conformance || {};
+          const score = c.score != null ? Math.round(c.score * 100) + "%" : "n/a";
+          const detail = c.usable ? ` (${c.hits}/${c.usable} checks)` : "";
+          msg(`Re-shoot ready. Conformance to your edited map: ${score}${detail} · AI-generated`);
+        }
         else { msg(`Run finished in ${j.elapsed_s}s.`); await loadRuns(j.clip_id); }
       }
     } catch (e) { clearInterval(S.jobTimer); msg(e.message, true); }
