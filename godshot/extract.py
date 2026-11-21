@@ -91,8 +91,11 @@ def _generate(model: str, contents: list[Any]) -> dict[str, Any]:
 
     from godshot.config import get_client
 
+    # Keep a reference: a temporary Client is garbage-collected mid-call and closes its httpx client
+    # ("Cannot send a request, as the client has been closed").
+    client = get_client()
     t0 = time.perf_counter()
-    resp = get_client().models.generate_content(
+    resp = client.models.generate_content(
         model=model,
         contents=contents,
         config=types.GenerateContentConfig(
