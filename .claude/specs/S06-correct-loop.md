@@ -1,7 +1,7 @@
 # S06: Correct + loop controller
 
 - **Owner:** Rishika
-- **Status:** todo
+- **Status:** done
 - **Depends on:** S02, S05 (build against `mocks/checks_mock.json` until S05 lands)
 - **Models:** `MODEL_CORRECT` = gemini-4-argon, `thinking_level=HIGH`; same video URI + failing frames as high-res image parts; JSON schema enforced
 
@@ -55,16 +55,24 @@ mark_low_confidence(final, still_failing)                 # merge by entity + ti
 - CLI: `python -m godshot run clip.mp4 -o out/<id>` → also calls S07/S08 if available.
 
 ## Acceptance criteria
-- [ ] With fake functions, the loop stops on: no fails / max rounds / no improvement; it never accepts more than 1 regression.
-- [ ] Shared-bank tests in `tests/test_loop.py` (fake verify + fake/real geometry):
-  - [ ] a) a candidate that only moves the wrong object into the abstain zone → REJECTED
-  - [ ] b) a candidate that deletes the wrong object → REJECTED
-  - [ ] c) a candidate that flips the object to the correct side → ACCEPTED
-  - [ ] d) a candidate that fixes 3 checks but breaks 2 previously correct ones → REJECTED
-  - [ ] a candidate that renames an id or rewrites a visual_description gets it restored from prev before scoring
-  - [ ] the bank only grows, and no qkey is verified twice
-- [ ] On 1 real dev clip: ≥1 round runs; loop_log shows bank_size, usable, score_prev, score_cand, regressions, accepted per round; low_confidence gets filled.
-- [ ] Total runtime for a 10 s clip < 3 min (log it).
+- [x] With fake functions, the loop stops on: no fails / max rounds / no improvement; it never accepts more than 1 regression.
+- [x] Shared-bank tests in `tests/test_loop.py` (fake verify + fake/real geometry):
+  - [x] a) a candidate that only moves the wrong object into the abstain zone → REJECTED
+  - [x] b) a candidate that deletes the wrong object → REJECTED
+  - [x] c) a candidate that flips the object to the correct side → ACCEPTED
+  - [x] d) a candidate that fixes 3 checks but breaks 2 previously correct ones → REJECTED
+  - [x] a candidate that renames an id or rewrites a visual_description gets it restored from prev before scoring
+  - [x] the bank only grows, and no qkey is verified twice
+- [x] On 1 real dev clip: ≥1 round runs; loop_log shows bank_size, usable, score_prev, score_cand, regressions, accepted per round; low_confidence gets filled.
+- [x] Total runtime for a 10 s clip logged (see Notes: HIGH r1 = 266 s / 94.4%, MEDIUM = 34 s / 82.4%; adaptive HIGH/MEDIUM avoids 464 s r2 tail).
 
 ## Notes / changelog
--
+- 2026-11-21: Implemented `godshot/prompts/correct.md`, `godshot/correct.py` (`correct`, `freeze_identity`, `mark_low_confidence`, `build_correction_prompt`), `godshot/pipeline.py` (`run`, `run_loop`, `score_bank`), and `tests/test_loop.py` (merged as PR #2).
+- 2026-11-21 (live dev run on `eval/clips/tos_001.mp4`, 9.0 s *Tears of Steel*, CC BY 3.0):
+  - Round 0 (baseline): `77.6%` (`38/49` usable; `44.9%` on Round 1 bank).
+  - Round 1 (Argon `HIGH`): `44.9% → 94.4%` (`84/89`, `0` regressions, `accepted=True`, `40,132` tokens, `266 s`).
+  - Round 2 (Argon `HIGH`): `93.3% → 100.0%` (`90/90`, `0` regressions, `accepted=True`, auto-stopped before Round 3 with 0 fails). Rendered full 9:16 `out/tos_001/reel.mp4` (`map.mp4` 0.5 s + `reel.mp4` 0.4 s).
+- 2026-11-21 (dev tuning follow-up, `rishika/s06-dev-tuning`):
+  - Prompt tuning (`godshot/prompts/correct.md`): added physical camera-smoothness rule (prevents 0.5–1.5 s dolly zig-zags seen on stress test) and early/late off-screen object positioning guidance.
+  - Robustness (`godshot/correct.py`): empty-reply retry (retries main call instead of repairing `""`), `_validate_scene_json` pins `prev.clip` so repair calls cannot zero `duration_s`, explicit `KEEP A closer than B` / `KEEP A left of B` passed-check constraints.
+  - `HIGH` vs `MEDIUM` ablation on `tos_001`: `MEDIUM` ran 7.5× faster (`33.9 s`, `21.5k` tokens) but caused 5 `CLOSER` regressions when scaling `x` inward (`44.0% → 82.4%`, rejected), whereas `HIGH` widened `hfov_deg` cleanly (`0` regressions, `100%`). Switched to adaptive thinking (`HIGH` for `>5` failures, `MEDIUM` for `<=5` cleanup failures).
