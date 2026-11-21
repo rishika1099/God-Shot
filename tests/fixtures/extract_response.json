@@ -1,0 +1,10 @@
+{
+ "text": "{\"schema\": \"scene.v1\", \"clip\": {\"id\": \"model_guess\", \"duration_s\": 99, \"fps\": 30, \"width\": 1, \"height\": 1}, \"room\": {\"outline\": [[-4, 0], [4, 0], [4, 9], [-4, 9]], \"notes\": \"far wall not seen\", \"confidence\": 0.6}, \"objects\": [{\"id\": \"table_1\", \"type\": \"table\", \"visual_description\": \"the round white table\", \"shape\": \"circle\", \"center\": [0.5, 5.0], \"size\": [1.2, 1.2], \"confidence\": 0.8}, {\"id\": \"chair_1\", \"type\": \"chair\", \"visual_description\": \"the red chair\", \"center\": [-2.0, 4.0], \"size\": [0.5, 0.5], \"confidence\": 0.7}, {\"id\": \"chair_2\", \"type\": \"chair\", \"visual_description\": \"The red chair\", \"center\": [2.0, 4.0], \"size\": [0.5, 0.5], \"confidence\": 0.6}, {\"id\": \"lamp_1\", \"type\": \"lamp\", \"visual_description\": \"the tall floor lamp\", \"center\": [20.0, 7.0], \"size\": [0.3, 0.3], \"confidence\": 0.5}], \"actors\": [{\"id\": \"a1\", \"visual_description\": \"woman in a yellow raincoat\", \"confidence\": 0.7, \"track\": [{\"t\": 4.0, \"mmss\": \"bogus\", \"x\": 1.0, \"y\": 6.0, \"facing_deg\": 180}, {\"t\": 0.5, \"x\": 0.0, \"y\": 7.0, \"facing_deg\": 180}, {\"t\": 8.0, \"x\": 2.0, \"y\": 5.0, \"facing_deg\": 90}]}], \"camera\": {\"hfov_deg\": 60, \"track\": [{\"t\": 0.0, \"x\": 0, \"y\": 0, \"yaw_deg\": 0}, {\"t\": 1.0, \"x\": 0, \"y\": 0.5, \"yaw_deg\": 5}, {\"t\": 2.0, \"x\": 0, \"y\": 1.0, \"yaw_deg\": 170}, {\"t\": 3.0, \"x\": 0, \"y\": 1.5, \"yaw_deg\": 10}, {\"t\": 9.0, \"x\": 0, \"y\": -50, \"yaw_deg\": 15}], \"motion_segments\": [{\"t0\": 0, \"t1\": 9, \"translation\": \"dolly_in\", \"rotation\": \"none\"}], \"confidence\": 0.6}, \"model_notes\": \"door partially occluded\"}",
+ "usage": {
+  "prompt_token_count": 5000,
+  "candidates_token_count": 900,
+  "thoughts_token_count": 1200,
+  "total_token_count": 7100
+ },
+ "latency_s": 21.4
+}
