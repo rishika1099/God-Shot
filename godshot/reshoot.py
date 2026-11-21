@@ -563,10 +563,11 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous, fluid 24fps Steadicam shot — NO jump cuts, NO slideshow transitions. Keep the room, "
-    "each person's identity, hair, and clothing strictly separate and consistent with the reference images "
-    "(NEVER transfer props, gauntlets, hair, or sleeves between people), while strictly following EVERY "
-    "camera movement, angle, behind-the-back viewpoint, and actor position or turn in the blockout video."
+    "One continuous, fluid 24fps Steadicam shot, no cuts, no jump cuts or slideshow transitions. Keep the "
+    "room, each person's identity, hair, and clothing strictly separate and consistent with the reference "
+    "images (NEVER transfer props, gauntlets, hair, or sleeves between people), while strictly following "
+    "EVERY camera movement, angle, behind-the-back viewpoint, and actor position or turn in the blockout "
+    "video."
 )
 
 
