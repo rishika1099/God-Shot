@@ -306,17 +306,34 @@ def _blockout_frame(
             )
         ):
             add(face, _shade(base, 1.15 if k == 4 else 0.85 + 0.05 * k))
-    # actors: body box + head box, oriented by facing_deg
+    # actors: body box + head box, oriented by facing_deg (distinct front face vs dark back-of-head hair)
     for a in scene.actors:
         ax, ay, facing, visible = geometry.interp_actor(a, t)
         if not visible:
             continue
         base = _hex((colors or {}).get(a.id, a.color), (231, 76, 60))
         bw, bd, bh = ACTOR_BODY
+        body_shade = (0.62, 0.85, 1.05, 0.85, 1.1)  # back, right, front, left, top
         for k, face in enumerate(_box_faces(ax, ay, bw, bd, facing, 0.0, bh)):
-            add(face, _shade(base, 1.1 if k == 4 else 0.8 + 0.06 * k))
-        for face in _box_faces(ax, ay, ACTOR_HEAD, ACTOR_HEAD, facing, bh, bh + ACTOR_HEAD):
-            add(face, (224, 190, 160))
+            add(face, _shade(base, body_shade[k]))
+        head_cols = (
+            (52, 40, 32),     # k=0 back (hair)
+            (210, 176, 146),  # k=1 right side
+            (238, 206, 174),  # k=2 front (face)
+            (210, 176, 146),  # k=3 left side
+            (52, 40, 32),     # k=4 top (hair)
+        )
+        for k, face in enumerate(_box_faces(ax, ay, ACTOR_HEAD, ACTOR_HEAD, facing, bh, bh + ACTOR_HEAD)):
+            add(face, head_cols[k])
+        # Small dark eyes/visor patch slightly proud of the front (+y) head face so Omni reads front vs back
+        r = math.radians(facing)
+        ux, uy = math.cos(r), math.sin(r)
+        vx, vy = -math.sin(r), math.cos(r)
+        hw, fd = ACTOR_HEAD * 0.32, ACTOR_HEAD * 0.5 + 0.008
+        z0, z1 = bh + ACTOR_HEAD * 0.48, bh + ACTOR_HEAD * 0.72
+        p_l = (ax - hw * ux + fd * vx, ay - hw * uy + fd * vy)
+        p_r = (ax + hw * ux + fd * vx, ay + hw * uy + fd * vy)
+        add([(*p_r, z0), (*p_l, z0), (*p_l, z1), (*p_r, z1)], (36, 36, 42), (36, 36, 42))
 
     # The camera is inside the room, so every wall is behind every object: walls first, then objects
     # and actors by depth (painter's algorithm, far → near).
@@ -538,8 +555,9 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous shot, no cuts. Keep the room, the people, their faces, their clothing, their "
-    "performance and every event identical to the original clip and the reference images."
+    "One continuous shot, no cuts. Keep the room, the people's identities, and their clothing consistent "
+    "with the reference images, while strictly following EVERY camera movement, angle, behind-the-back "
+    "viewpoint, and actor position or turn shown in the blockout video."
 )
 
 
@@ -564,6 +582,69 @@ def _beat_lines(beats: list[dict[str, Any]], time_scale: float) -> list[str]:
     ]
 
 
+def _actor_view_side(cam: tuple[float, float, float], ax: float, ay: float, facing_deg: float) -> str:
+    """Is the camera looking at the actor's front, back, or side profile?"""
+    dx, dy = cam[0] - ax, cam[1] - ay
+    dist = math.hypot(dx, dy)
+    if dist < 1e-4:
+        return "front"
+    r = math.radians(facing_deg)
+    fwd = (-math.sin(r), math.cos(r))
+    dot = (dx * fwd[0] + dy * fwd[1]) / dist
+    if dot < -0.35:
+        return "back"
+    if dot > 0.35:
+        return "front"
+    return "side"
+
+
+def _viewpoint_notes(
+    scene: SceneV1, dur: float, time_scale: float = 1.0, scene_orig: SceneV1 | None = None
+) -> tuple[list[str], bool]:
+    """Explicitly state when the camera orbits behind any actor relative to the original shot."""
+    if not scene.actors or dur <= 0:
+        return [], False
+    ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
+    samples = [dur * i / 8 for i in range(9)]
+    notes: list[str] = []
+    has_back = False
+    for a in scene.actors:
+        runs: list[tuple[str, float, float]] = []
+        for t in samples:
+            cam = geometry.interp_camera(scene, t)
+            ax, ay, facing, vis = geometry.interp_actor(a, t)
+            if not vis or not geometry.in_view(cam, (ax, ay), scene.camera.hfov_deg):
+                continue
+            # Prefer true geometric flip relative to scene_orig camera (immune to noisy extracted facing_deg)
+            if scene_orig is not None:
+                oc = geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))
+                v_orig = (oc[0] - ax, oc[1] - ay)
+                v_edit = (cam[0] - ax, cam[1] - ay)
+                d_orig, d_edit = math.hypot(*v_orig), math.hypot(*v_edit)
+                if d_orig > 0.2 and d_edit > 0.2:
+                    cos_rel = (v_orig[0] * v_edit[0] + v_orig[1] * v_edit[1]) / (d_orig * d_edit)
+                    side = "back" if cos_rel < -0.45 else ("side" if cos_rel < 0.25 else "front")
+                else:
+                    side = "front"
+            else:
+                side = _actor_view_side(cam, ax, ay, facing)
+            if runs and runs[-1][0] == side:
+                runs[-1] = (side, runs[-1][1], t)
+            else:
+                runs.append((side, t, t))
+        for side, t0, t1 in runs:
+            if side == "back":
+                has_back = True
+                span = f"{ts(t0)}–{ts(t1)}" if t1 > t0 else f"around {ts(t0)}"
+                notes.append(
+                    f"{span}: the camera orbits behind {a.visual_description} (reverse angle), "
+                    "viewing the back of their head and shoulders instead of their front"
+                )
+            elif side == "side" and t1 - t0 >= dur * 0.25:
+                notes.append(f"{ts(t0)}–{ts(t1)}: {a.visual_description} is viewed in side profile")
+    return notes, has_back
+
+
 def describe_shot(
     scene_edited: SceneV1,
     duration_s: float | None = None,
@@ -572,6 +653,7 @@ def describe_shot(
     orig_hfov: float | None = None,
     time_scale: float = 1.0,
     directed: bool = False,
+    scene_orig: SceneV1 | None = None,
 ) -> str:
     """Edited map → concrete shot description. Deterministic template from geometry (same map, same text).
 
@@ -581,8 +663,9 @@ def describe_shot(
     `polish=True` asks Hydrogen (MODEL_CHEAP) to smooth the wording without changing any fact (cached).
     """
     f = shot_facts(scene_edited, duration_s)
+    dur = f["duration_s"]
     ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
-    out_len = f["duration_s"] / time_scale
+    out_len = dur / time_scale
     lines = [f"A {out_len:g}-second shot on {f['lens']}.", f"At the start: {f['start']}."]
     fov = _fov_line(scene_edited.camera.hfov_deg, orig_hfov)
     if fov:
@@ -593,10 +676,28 @@ def describe_shot(
     lines.append(f"At the end: {f['end']}.")
     if f["actors"]:
         lines.append(f"Floor positions: {'; '.join(f['actors'])}.")
+    vp_notes, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
+    if vp_notes:
+        lines.append("Camera viewpoint relative to actors (follow the blockout camera angle strictly):")
+        lines += vp_notes
     if beats:
         lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
         lines += _beat_lines(beats, time_scale)
-    lines.append(SHOT_RULES_DIRECTED if directed else SHOT_RULES)
+    rules = SHOT_RULES_DIRECTED if directed else SHOT_RULES
+    if scene_edited.actors:
+        n_act = len(scene_edited.actors)
+        rules += (
+            f" STRICT CAST COUNT: There are EXACTLY {n_act} {'person' if n_act == 1 else 'people'} in the "
+            "entire scene. ONLY draw a person where a colored human figure box appears in the blockout. "
+            "The grey walls/background of the blockout contain ZERO people — NEVER paste extra people, "
+            "bystanders, or duplicate copies of actors from the reference image into the background."
+        )
+    if has_back:
+        rules += (
+            " When the camera moves behind a person, show the back of THAT SAME person's head and clothing "
+            "instead of their front — never keep a duplicate front copy in the background."
+        )
+    lines.append(rules)
     text = "\n".join(lines)
     return _polish(text) if polish else text
 
@@ -627,6 +728,7 @@ def edit_prompt(
     orig_hfov: float | None = None,
     time_scale: float = 1.0,
     directed: bool = False,
+    scene_orig: SceneV1 | None = None,
 ) -> str:
     """Prompt for Omni `edit`: the blockout gives ONLY the camera + positions.
 
@@ -640,29 +742,39 @@ def edit_prompt(
         f" is {e.visual_description}"
         for e in [*scene_edited.actors, *scene_edited.objects]
     ]
+    _, has_back = _viewpoint_notes(
+        scene_edited, duration_s or scene_edited.clip.duration_s, time_scale, scene_orig=scene_orig
+    )
+    use_beats = None if has_back else beats
     only = "Change ONLY the camera position, angle, point of view and field of view."
     if directed:
         keep, only = "What the people do is described in the PERFORMANCE section below.", ""
-    elif beats:
+    elif use_beats:
         keep = (
             "The people must perform exactly as in the original clip (performance beats below): the same "
             "actions, gestures, expressions, head turns and timing."
         )
     else:
-        keep = "The people behave exactly as in the reference images; do not invent new actions."
+        keep = (
+            "Keep the room and the people's visual identities and outfits consistent with the reference "
+            "images, while letting them naturally be viewed from any new angle (including from behind) "
+            "to match the blockout video."
+        )
     return (
         "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
         "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and where "
         f"people and things are; they do NOT show the performance. In the previs: {'; '.join(legend)}. "
-        f"Keep the camera motion, timing and framing EXACTLY as in the input video. {keep} {only}".rstrip()
+        f"Keep the camera motion, timing and framing EXACTLY as in the input video "
+        f"(dark hair side = back of head, dark visor side = front face). {keep} {only}".rstrip()
         + "\n"
         + describe_shot(
             scene_edited,
             duration_s,
-            beats=beats,
+            beats=use_beats,
             orig_hfov=orig_hfov,
             time_scale=time_scale,
             directed=directed,
+            scene_orig=scene_orig,
         )
     )
 
@@ -765,12 +877,18 @@ def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: i
     info = ingest.probe(clip, check_length=False)
     dur = info.duration_s
     last = dur - 1.2 / info.fps
-    keys = [ingest.frame_at(clip, min(f * dur, last), out_dir / "frames") for f in (0.1, 0.5, 0.9)]
+    # Multi-actor scenes: 1 full frame + tight crop per actor (avoids Omni cloning people into the
+    # background on orbits). Single/zero-actor scenes: 2 keyframes + actor/object crops (≥ 3 refs total).
+    fracs = (0.5,) if len(scene_orig.actors) >= 2 else (0.2, 0.8)
+    keys = [ingest.frame_at(clip, min(f * dur, last), out_dir / "frames") for f in fracs]
     refs = list(keys)
     hfov = scene_orig.camera.hfov_deg
     span = min(dur, scene_orig.clip.duration_s)
     actor_ids = {a.id for a in scene_orig.actors}
-    for e in [*scene_orig.actors, *scene_orig.objects]:
+    entities_for_crops = (
+        list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *scene_orig.objects]
+    )
+    for e in entities_for_crops:
         if len(refs) >= max_refs:
             break
         for f in (0.5, 0.3, 0.7, 0.1, 0.9):
@@ -784,7 +902,7 @@ def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: i
             if vis and 0.12 < sx < 0.88:
                 frame = Image.open(ingest.frame_at(clip, min(t * dur / span, last), out_dir / "frames"))
                 w, h = frame.size
-                cx, half = int(sx * w), int(0.2 * w)
+                cx, half = int(sx * w), int(0.15 * w)
                 crop = frame.crop((max(0, cx - half), 0, min(w, cx + half), h)).convert("RGB")
                 path = out_dir / f"crop_{e.id}.jpg"
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -898,14 +1016,14 @@ def reshoot(
         )
         base = edit_prompt(
             scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
-            directed=directed,
+            directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
         prompt = _directed(base, direction) + suffix
         generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
     else:
         base = describe_shot(
             scene_edited, want, polish=polish, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
-            directed=directed,
+            directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
         prompt = _directed(base, direction) + suffix
         generate_video(ref_bytes, prompt, raw, duration=f"{round(out_len):d}s", resolution=resolution)

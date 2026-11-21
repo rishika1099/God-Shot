@@ -8,7 +8,7 @@ const S = {
   runId: null, run: null, orig: null, scene: null, waypoints: [],
   t: 0, playing: false, lastTick: 0, round: null,
   sel: { cam: null, actor: null }, drag: null, hover: null, view: null, offline: false, jobTimer: null,
-  tool: "select", loop: true, curveMode: true, actorDragMode: "key", sceneLocked: false,
+  tool: "select", loop: true, curveMode: true, actorDragMode: "all", sceneLocked: false,
   orbitDir: 1, orbitSweep: 360, orbitRadius: null, lastOrbitAnchor: null,
   drawStroke: null, orbitDraft: null, undo: [], redo: [],
   kfDrag: null,
@@ -1328,20 +1328,43 @@ function drawActor(a, P, s, dpr) {
     ctx.beginPath(); ctx.arc(px, py, Math.max(18 * dpr, 0.48 * s), 0, 2 * Math.PI); ctx.stroke();
   }
   ctx.save(); ctx.translate(px, py); ctx.rotate(-rad(now.facing));
-  ctx.globalAlpha = low ? 0.5 : 1; ctx.fillStyle = col;
-  ctx.beginPath(); ctx.ellipse(0, 0, Math.max(12 * dpr, 0.36 * s), Math.max(6 * dpr, 0.18 * s), 0, 0, 2 * Math.PI); ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1.4 * dpr; ctx.stroke();
-  ctx.fillStyle = "#f5d0b0"; ctx.beginPath(); ctx.arc(0, 0, Math.max(5 * dpr, 0.13 * s), 0, 2 * Math.PI); ctx.fill();
+  ctx.globalAlpha = low ? 0.5 : 1;
+  const hr = Math.max(6.5 * dpr, 0.16 * s);
+  // Soft gaze cone in front (-Y = FACE direction)
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-hr * 2.2, -hr * 3.8); ctx.lineTo(hr * 2.2, -hr * 3.8); ctx.closePath(); ctx.fill();
+  // Shoulders
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.ellipse(0, 0, Math.max(13 * dpr, 0.36 * s), Math.max(6.5 * dpr, 0.18 * s), 0, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.4 * dpr; ctx.stroke();
+  // Head (front = beige skin + nose pointer + eyes; back = dark hair)
+  ctx.fillStyle = "#f5d0b0";
+  ctx.beginPath(); ctx.arc(0, 0, hr, 0, 2 * Math.PI); ctx.fill();
+  // Nose triangle pointing straight forward (-Y = FACE)
+  ctx.fillStyle = "#f5d0b0";
+  ctx.beginPath(); ctx.moveTo(-hr * 0.42, -hr * 0.72); ctx.lineTo(hr * 0.42, -hr * 0.72); ctx.lineTo(0, -hr * 1.42); ctx.closePath(); ctx.fill();
+  // Eyes on front half
+  ctx.fillStyle = "#111827";
+  ctx.beginPath(); ctx.arc(-hr * 0.32, -hr * 0.35, Math.max(1.2 * dpr, hr * 0.14), 0, 2 * Math.PI); ctx.fill();
+  ctx.beginPath(); ctx.arc(hr * 0.32, -hr * 0.35, Math.max(1.2 * dpr, hr * 0.14), 0, 2 * Math.PI); ctx.fill();
+  // Dark hair cap on the BACK half (+Y = BACK OF HEAD)
+  ctx.fillStyle = "#2b211a";
+  ctx.beginPath(); ctx.arc(0, 0, hr * 1.02, 0, Math.PI); ctx.closePath(); ctx.fill();
   ctx.restore(); ctx.globalAlpha = 1;
-  ctx.strokeStyle = col; ctx.lineWidth = 2 * dpr;
+  ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 1.6 * dpr;
   const fh = actorFacingHandle(now);
   line([px, py], fh);
-  // Interactive Facing / Turn Handle at the tip of the actor's heading arrow!
+  // Arrowhead pointing in FACE direction + draggable Turn Handle
+  const ang = Math.atan2(fh[1] - py, fh[0] - px);
+  ctx.save(); ctx.translate(fh[0], fh[1]); ctx.rotate(ang);
+  ctx.fillStyle = "#f8fafc";
+  ctx.beginPath(); ctx.moveTo(4 * dpr, 0); ctx.lineTo(-5 * dpr, -3.5 * dpr); ctx.lineTo(-5 * dpr, 3.5 * dpr); ctx.closePath(); ctx.fill();
+  ctx.restore();
   if (!S.sceneLocked) {
     const fHov = (S.hover?.kind === "actor_face" && S.hover.id === a.id) || (S.drag?.kind === "actor_face" && S.drag.id === a.id);
     ctx.fillStyle = fHov ? "#ffffff" : "#0b0e14";
-    ctx.strokeStyle = fHov ? "#ffffff" : col;
-    ctx.lineWidth = (fHov ? 2.4 : 1.8) * dpr;
+    ctx.strokeStyle = fHov ? "#ffffff" : "#f8fafc";
+    ctx.lineWidth = (fHov ? 2.4 : 1.6) * dpr;
     ctx.beginPath(); ctx.arc(fh[0], fh[1], (fHov ? 6.8 : 5.2) * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
   }
   pillLabel(`${a.id}${low ? " ?" : ""}`, px, py - Math.max(16 * dpr, 0.44 * s) - 9 * dpr, dpr, low ? "#f5bf4f" : "#f8fafc");
