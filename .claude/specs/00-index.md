@@ -9,7 +9,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | 1:45 | todo |
 | S03 | Geometry: projection math | Siva | S00 | 1:15 | done |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | 2:00 | done |
-| S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | todo |
+| S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | in progress (code + offline tests done; live run pending `.env` + frames) |
 | S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | todo |
 | S07 | Render: animated overhead map | Akash | S00 | 2:00 | todo |
 | S08 | Compose: 9:16 reel | Akash | S07, S01 | 2:30 | todo |
