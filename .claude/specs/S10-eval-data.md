@@ -1,9 +1,8 @@
 # S10: Eval data (CameraBench subset + clips + human labels)
 
-- **Owner:** Rishika (everyone labels for 20 minutes at ~1:30)
+- **Owner:** Rishika (everyone helps label)
 - **Status:** todo
 - **Depends on:** S00 (`label.v1` schema)
-- **Target:** 4:00 (dev split ready by 1:30; test split complete by 4:00)
 - **Models:** none
 
 ## Goal
@@ -25,8 +24,8 @@ Inputs we didn't hand-pick to pass, with human labels written before seeing mode
 - **Split:** 5 dev clips (mixed sources), everything else test. Never tune on test.
 
 ## Acceptance criteria
-- [ ] By 1:30: 5 dev clips labeled.
-- [ ] By 4:00: ≥ 20 own test clips labeled + 40 CameraBench clips mapped; `labels.jsonl` validates against `LabelV1`.
+- [ ] 5 dev clips labeled (needed first, for tuning).
+- [ ] ≥ 20 own test clips labeled + 40 CameraBench clips mapped; `labels.jsonl` validates against `LabelV1`.
 - [ ] `CREDITS.md` lists every non-own clip with its license; consent is collected for every venue clip.
 
 ## Notes / changelog
