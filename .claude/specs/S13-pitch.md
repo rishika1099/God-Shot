@@ -3,7 +3,6 @@
 - **Owner:** Rishika (Akash builds the failure gallery stills; everyone rehearses)
 - **Status:** todo
 - **Depends on:** S11 (numbers), S08/S12 (pre-rendered reels)
-- **Target:** deck v1 at 5:30, final at 7:15, rehearsal ×2 by 7:50
 - **Models:** none
 
 ## Goal
@@ -32,7 +31,7 @@ A 3-minute demo that proves the claim with our own numbers, and survives bad Wi-
 ## Acceptance criteria
 - [ ] Two full rehearsals under 3:00.
 - [ ] The demo runs in offline cached mode.
-- [ ] README has final numbers, credits, a team list and a "built today" note; repo is public; submission done by 7:50.
+- [ ] README has final numbers, credits, a team list and a "built today" note; repo is public; submission done.
 
 ## Notes / changelog
 -

@@ -3,7 +3,6 @@
 - **Owner:** Akash
 - **Status:** todo
 - **Depends on:** S00 (build against `mocks/scene_mock.json`); uses `geometry.interp_*` from S03 (write a local stub until it lands)
-- **Target:** 2:00
 - **Models:** none (stretch: `MODEL_IMAGE` background)
 
 ## Goal
