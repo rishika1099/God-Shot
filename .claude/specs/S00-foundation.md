@@ -3,7 +3,7 @@
 - **Owner:** Prajesh
 - **Status:** in progress (all code + tests done; waiting on team `.env` for `smoke` + model-ID verification)
 - **Depends on:** none
-- **Target:** 12:30 (M0). Everyone else is waiting on this, so keep it minimal.
+- **Priority:** everyone else builds on this, so keep it minimal.
 - **Models:** none (one smoke-test call each to Argon and Decisions)
 
 ## Goal

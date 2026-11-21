@@ -3,7 +3,6 @@
 - **Owner:** Siva
 - **Status:** todo
 - **Depends on:** S08 (S06 `pipeline.run` for live runs)
-- **Target:** 5:00
 - **Models:** none directly (calls the pipeline); the text-edit command uses `MODEL_CHEAP`
 
 ## Goal

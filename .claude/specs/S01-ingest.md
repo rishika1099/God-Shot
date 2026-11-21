@@ -3,7 +3,6 @@
 - **Owner:** Prajesh
 - **Status:** todo
 - **Depends on:** S00
-- **Target:** 1:00
 - **Models:** Gemini Files API (no generation)
 
 ## Goal

@@ -3,7 +3,6 @@
 - **Owner:** Siva
 - **Status:** todo
 - **Depends on:** S00
-- **Target:** 1:15
 - **Models:** none (pure numpy)
 
 ## Goal
