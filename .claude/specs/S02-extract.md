@@ -77,3 +77,16 @@ Give each element a confidence in [0,1]; lower it when guessing (occlusion, dark
   - `detect_cuts(clip)`: ffmpeg `scene` score > 0.2 on a 320 px proxy, ignoring the first/last 0.1 s. On the test clips, 0.15–0.2 separated the 5 real cuts from a fast orbit (0 false positives), while 0.3 missed every cut. `mark_cuts` adds a low-confidence `camera` range of ±0.5 s per cut (`failed_checks: ["cut_detected"]`) and a note. Clips are not rejected; S07 shows the dimmed wedge and "?" badge there.
   - Re-run from cache (no API calls): orbit rotation is now `pan_right` throughout (matches the frames). Walk goes from the wrong `truck_left → dolly_out` to `static` (less wrong, still not "forward": a prompt problem). cuts15: 4 cuts flagged (the 5th, at 14.89 s, falls inside the end margin).
   - **Model error found:** on the orbit, Argon's position path curves **counterclockwise** while its yaw turns **clockwise**. These are inconsistent: an orbit faces its centre, so position and yaw turn the same way. The derived translation therefore flickers truck/dolly/arc between windows. That faithfully reports the inconsistent track, so I did not smooth it. Fix it upstream: a prompt rule ("when orbiting, position and yaw rotate the same way"), and S06's verify/correct loop.
+- **⚠️ CORRECTION (2026-11-21): my by-eye "ground truth" for the orbit and walk clips above was wrong.** Judged again from the *far background* (which separates an orbit from a pan):
+  - **Orbit:** the background slides left → right, so the camera is turning **left**. The people slide right → left only because of foreground parallax while the camera moves right. Truth = **`arc_right / pan_left`**. So the MEDIUM baseline's yaw (0 → −220°, turning right) was **wrong**, not "rotation correct", and the derived `pan_right` faithfully reports a wrong track. The "position path counterclockwise vs yaw clockwise" inconsistency noted above was real; the yaw was the wrong half.
+  - **Walk:** the background keeps its framing and scale for all 6 s (people walk into the shot; Banner grows because *he* approaches). Truth ≈ **static**. The derived `static` is about right, not "less wrong".
+  - Revised path-direction tally for MEDIUM @ 4 fps: walk ✅, orbit ❌ → still 1 of 2.
+- **Experiment: thinking level × fps** (same two clips, 8 cached Argon calls, outputs in `out/exp/`):
+  | config | orbit | walk | latency orbit / walk | thinking tokens |
+  |---|---|---|---|---|
+  | MEDIUM @ 4 (current) | ❌ turns right, −220° | ✅ ≈ static | 30 / 32 s | **0 reported** |
+  | MEDIUM @ 8 | ✅ +180°, `arc_right/pan_left` | ❌ `dolly_out` (−2.3) | 36 / 24 s | 0 |
+  | HIGH @ 4 | ✅ +276°, `arc_right/pan_left`, path curl and yaw agree | ✅ | 236 / 70 s | 23.6k / 4.7k |
+  | HIGH @ 8 | ✅ +240°, `arc_right/pan_left` | ✅ | 160 / 52 s | 14.8k / 3.5k |
+  - **MEDIUM reports no thinking tokens at all**, so the model isn't reasoning. HIGH was right on both clips, and its orbit position and yaw are geometrically consistent.
+  - Cost: 2–8× latency (an orbit at HIGH takes 2.5–4 min). Only 2 clips, and not from the dev split: **a signal, not a decision**. Recommended next: re-run on ~10 CameraBench dev clips with human labels before changing `THINKING_LEVEL` (models.md says MEDIUM, so changing it is a team decision).
