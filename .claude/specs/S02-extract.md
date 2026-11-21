@@ -1,7 +1,7 @@
 # S02: Extract (Argon → scene.v1; this IS the baseline)
 
 - **Owner:** Akash
-- **Status:** todo
+- **Status:** in progress (code + offline tests done; live run on 3 dev clips pending `.env` + clips)
 - **Depends on:** S00, S01
 - **Models:** `MODEL_EXTRACT` = gemini-4-argon, static video processing, `fps=cfg.FPS` (4), `thinking_level=MEDIUM`, JSON schema enforced
 
@@ -48,8 +48,18 @@ Give each element a confidence in [0,1]; lower it when guessing (occlusion, dark
 ## Acceptance criteria
 - [ ] Runs on 3 dev clips and produces a valid `scene_r0.json` for each.
 - [ ] Sanity check by eye: render it with S07, or for now plot camera x/y in a scratch notebook. The path direction matches the clip on at least 2 of 3.
-- [ ] Cached: a second run makes no network call.
-- [ ] Median latency per 10 s clip is logged.
+- [x] Cached: a second run makes no network call (tested offline with `GODSHOT_OFFLINE=1`).
+- [x] Median latency per 10 s clip is logged (`latency_s_per_10s` per clip in `loop_log.json`; median is taken across clips by S11).
 
 ## Notes / changelog
--
+- 2026-11-21 (Akash): built `extract.py`, `prompts/extract.md` (spec starting text, untuned), CLI `baseline`, `tests/test_extract.py` (20 offline tests, fixture `tests/fixtures/extract_response.json`).
+- **S01 stand-in:** S01 isn't merged yet, so `godshot/ingest_standin.py` (new, temporary) provides `probe` (ffprobe, or dummy 10 s/24 fps/1280×720 metadata when ffprobe is missing) and `upload` (Files API + poll). `extract._probe/_upload` call `godshot.ingest` first and fall back to the stand-in only on `NotImplementedError`, so the real S01 takes over automatically when it lands. Delete the stand-in after S01 merges.
+- Cache key = `[clip_bytes, MODEL_EXTRACT, prompt, {fps, thinking_level, schema}]`; the upload happens inside the miss path, so a cache hit makes zero network calls. The repair call is cached separately (`kind=extract_repair`).
+- Cached payload = `{text, usage, latency_s}`; on a hit, the logged latency is the original call's latency and `cached_calls` counts the hit.
+- `clip` metadata always comes from probe, not from the model.
+- Deviation: description de-duplication (plus capping to 6 objects/3 actors and de-duplicating ids) runs on the raw dict in `sanitize_raw`, *before* validation, because `SceneV1` rejects duplicate descriptions. `postprocess(scene)` does the rest: it clamps t to [0, duration], sorts keys, drops same-t duplicates, holds the first/last key to t=0 and t=duration (tolerance 10 ms), fixes yaw jumps, clamps coordinates to the room bbox ±1 (no-op when there is no outline), and recomputes every `mmss`.
+- Duplicate descriptions get " (the one further left/right/farther away/nearer the camera)" relative to the first entity, or are dropped when they are within 0.25 units of it.
+- Yaw jump fix: a spike (out and back) takes the circular midpoint of its neighbours; otherwise the midpoint of prev and current yaw. Each fix is noted in `model_notes` as `[postprocess] ...`. Only camera yaw is fixed; actor `facing_deg` is not.
+- `loop_log.json` round 0 also has `latency_s_per_10s`, `calls` and `cached_calls`. `write_loop_log` upserts by `round`, so S06 can append rounds 1+.
+- VERIFIED against google-genai 3.6.1: `GenerateContentConfig.response_json_schema`, `VideoMetadata.fps`, usage token fields. Not yet verified live: whether Argon accepts the pydantic schema's `$defs`/`$ref` and `const`.
+- TODO (live): run `python -m godshot baseline clips/<dev>.mp4 -o out/<id>` on 3 dev clips, check path direction by eye.
