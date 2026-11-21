@@ -1,7 +1,7 @@
 # S11: Scoring, metrics and charts
 
 - **Owner:** Siva (`score.py`), Rishika (charts in `report.ipynb`)
-- **Status:** todo
+- **Status:** in progress (charts notebook `eval/report.ipynb` ready; awaiting `eval/score.py` + runs)
 - **Depends on:** S03, S10, S06 (start against mocks + the first baseline runs)
 - **Models:** none for scoring; `MODEL_VERIFY` only for the verifier-vs-human metric
 
@@ -26,4 +26,4 @@ Turn runs + human labels into the slide numbers: baseline vs loop, verifier accu
 - [ ] Every number on the slides traces to `results.md`.
 
 ## Notes / changelog
--
+- 2026-11-21 (Rishika): Built `eval/report.ipynb` with all chart & report cells (clip-cluster 95% bootstrap CIs, two-sided exact paired sign test, grouped bars by label type / CameraBench vs own clips / difficulty, 5-bin reliability diagram + ECE + Brier, mirrored-control yes-bias, selective accuracy, rounds-to-converge + latency, and `eval/results.md` + `eval/failures.md` exporters). Ready to run on `dev` by 3:45 PM and `test` after the >= 4:00 PM freeze.
