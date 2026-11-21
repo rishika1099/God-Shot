@@ -15,7 +15,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S08 | Compose: 9:16 reel | Akash | S07, S01 | todo |
 | S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | todo |
 | S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | todo |
-| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | todo |
+| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | in progress (score.py + run_all.py done; numbers need runs) |
 | S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | todo |
 | S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | todo |
 
