@@ -145,6 +145,50 @@ def web(
     uvicorn.run(web_app, host=host, port=port, log_level="info")
 
 
+@app.command()
+def reshoot(
+    clip: str,
+    orig: str = typer.Option(..., "--orig", help="Original scene JSON (e.g. out/<id>/scene_final.json)."),
+    edited: str = typer.Option(..., "--edited", help="Edited scene JSON (from the map editor)."),
+    o: str = typer.Option(..., "-o", help="Output folder."),
+    n: int = typer.Option(1, "--n", help="Takes to generate; the best by conformance is kept."),
+    mode: str = typer.Option("blockout", "--mode", help="blockout (map-exact guide) | text (fallback)."),
+    resolution: str = typer.Option("360p", "--resolution"),
+    duration: str = typer.Option("8s", "--duration", help="Max length; the guide is cut to this."),
+) -> None:
+    """Edited map → AI-generated re-shoot + conformance score (S12)."""
+    from pathlib import Path
+
+    from godshot.reshoot import reshoot_best
+    from godshot.schema import SceneV1
+
+    r = reshoot_best(
+        Path(clip), SceneV1.load(orig), SceneV1.load(edited), Path(o), n=n,
+        mode=mode, resolution=resolution, duration=duration,
+    )  # fmt: skip
+    typer.echo(f"{r['label']}: {r['video']}")
+    score = f"{r['score']:.2f} ({r['hits']}/{r['usable']})"
+    typer.echo(f"conformance vs edited map: {score}, best take {r['best_take']}/{n}")
+
+
+@app.command()
+def conformance(
+    video: str,
+    edited: str = typer.Option(..., "--edited", help="The scene JSON the video should follow."),
+) -> None:
+    """Score any video against a scene with S04 checks + S05 verifier (S12)."""
+    from pathlib import Path
+
+    from godshot.reshoot import conformance as score
+    from godshot.schema import SceneV1
+
+    r = score(Path(video), SceneV1.load(edited))
+    by = ", ".join(
+        f"{k} {v['hits']}/{v['usable']}" for k, v in sorted(r["by_template"].items()) if v["usable"]
+    )
+    typer.echo(f"conformance: {r['score']:.2f} ({r['hits']}/{r['usable']} usable of {r['n_checks']}) | {by}")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     app()

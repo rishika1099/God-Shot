@@ -1,7 +1,7 @@
 # S10: Eval data (CameraBench subset + clips + human labels)
 
 - **Owner:** Rishika (everyone helps label)
-- **Status:** todo
+- **Status:** in progress (40 CameraBench mapped + 11 Blender clips trimmed; human labels next)
 - **Depends on:** S00 (`label.v1` schema)
 - **Models:** none
 
@@ -29,4 +29,8 @@ Inputs we didn't hand-pick to pass, with human labels written before seeing mode
 - [ ] `CREDITS.md` lists every non-own clip with its license; consent is collected for every venue clip.
 
 ## Notes / changelog
--
+- 2026-11-21: Implemented `eval/camerabench/fetch.py`, `eval/label_tool.py` (`template`, `import-csv`, `interactive`, `fill-entity-map`, `validate`), `eval/CREDITS.md`, and `eval/consent/CONSENT_TEMPLATE.md`.
+- **Verified CameraBench taxonomy & license (`syCen/CameraBench`, CC BY 4.0):** Co-occurrence across all 1,071 `test.jsonl` clips proves `arc-CW` co-occurs exclusively with `truck-left` (6) + `pan-right` (9) → mapped to `arc_left`, and `arc-CCW` co-occurs exclusively with `truck-right` (11) + `pan-left` (15) → mapped to `arc_right` (opposite of the unverified placeholder in the spec).
+- Fetched 40 CameraBench clips (seed 0, 5–15 s, GIF→MP4 in gitignored `eval/clips/cb_001..040.mp4`) and trimmed 11 zero-cut Blender Open Movie clips (`tos_001`–`010` + `sintel_001`: 5 `dev` + 6 `test`) into `eval/clips/` + `eval/clips.csv` + `eval/CREDITS.md`.
+- Confirmed intentional: `eval/camerabench/labels.jsonl` stores the standalone 40-clip CameraBench subset, and `eval/labels/labels.jsonl` is the unified label file (currently those 40 CameraBench clips; own `dev`/`test` human labels merge into it via `eval/label_tool.py import-csv`).
+- Remaining: human-label the 5 `dev` clips first (for tuning), then collect & label >= 20 own `test` clips (Pexels + non-team venue clips w/ signed consent + 3 taped-grid clips, 25% double-labeled).

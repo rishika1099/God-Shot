@@ -1,0 +1,4 @@
+clip_id,source,license,split,difficulty,labeler,type,t,t0,t1,subject,a,b,value
+tos_001,tears_of_steel,CC BY 3.0,dev,easy,Rishika,CAM_TRANSLATION,,0.0,4.0,,,,dolly_in
+tos_001,tears_of_steel,CC BY 3.0,dev,easy,Rishika,SIDE,2.0,,,the woman in the grey jacket,,,left
+tos_001,tears_of_steel,CC BY 3.0,dev,easy,Rishika,A_LEFT_OF_B,3.0,,,,the woman in the grey jacket,the large wooden door,true
