@@ -901,7 +901,62 @@ main {
   color: var(--muted);
 }
 
-/* ------------------------------------------------------------------ Cinema Monitor */
+/* ------------------------------------------------------------------ Cinema Monitor (Before | After Sync) */
+.video-stage {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.video-stage.compare {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 700px) {
+  .video-stage.compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+.video-stage:not(.compare) .after-slot {
+  display: none;
+}
+
+.video-stage:not(.compare) .before-badge {
+  display: none;
+}
+
+.player-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.slot-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.before-badge {
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #dbe3f3;
+}
+
+.after-badge {
+  background: rgba(167, 139, 250, 0.16);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  color: #dcd0ff;
+}
+
 .player {
   background: #040507;
   border: 1px solid var(--line);
