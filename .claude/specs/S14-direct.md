@@ -1,7 +1,7 @@
 # S14: Direct (scene analyst + director agents for re-shoots)
 
 - **Owner:** Akash (edits to `godshot/reshoot.py` approved by its owner, Prajesh, 2026-11-21)
-- **Status:** in progress
+- **Status:** in review
 - **Depends on:** S12 (re-shoot), S05 (Decisions `ask`), S03 (geometry), S01 (upload)
 - **Models:** `MODEL_EXTRACT` (gemini-4-argon, `thinking_level=HIGH`) for the analyst, director and critic; `MODEL_CHEAP` (gemini-4-hydrogen) for the edit interpreter; `MODEL_VERIFY` (gemini-decision-1) for the preservation and fulfilment scores. Gemini only.
 
@@ -18,37 +18,40 @@ the dramatic intent are lost, and nothing measures that loss.
 - `tests/test_direct.py`
 
 ## Spec
-1. **Scene analyst:** `analyze_scene(clip, scene_orig) -> SceneBrief`. Argon watches the ORIGINAL clip (Files API
-   video part) with the original map as context. Output (JSON schema enforced): logline, intent, timed action
-   beats per person (action, gaze/gesture, prop contact), performance per person (gait, pace, posture, emotion,
-   wardrobe), environment (light, palette, atmosphere), notable physics, and ≤ 8 **must-preserve** items, each
-   with a yes/no visual check that is TRUE when the element is preserved. People are named by their
-   `visual_description`, never by id. Cached.
-2. **Scene diff (pure code):** `scene_diff(orig, edited)`: per actor, path length, mean speed (1 unit ≈ 1 m, as
-   S12), implied gait, net direction, start/end shift, change in distance to the camera, nearest object at the
-   end; moved, added and removed entities; camera moves before/after (S12 `shot_facts`). Facts only, no judgement.
-3. **Director:** `direct(brief, scene_orig, scene_edited) -> Direction`. Argon, HIGH thinking, given the brief and
-   the diff. It deliberates how each person's behaviour and physics must change to look natural under the edit
-   (speed, gait, lean, weight shift, timing, contact, gaze relative to the new camera) while keeping the intent
-   and every must-preserve item. Output: change summary, per-person adaptations (change → physical reasoning →
-   adjusted behaviour), beat re-timing, how each must-preserve item survives, conflicts + resolutions, and one
-   concise performance paragraph for the video model. Cached.
-4. **Directed prompt:** `directed_prompt(base, brief, direction)`. S12's geometric prompt stays first and
-   authoritative; then a PERFORMANCE section (the director's paragraph), a MUST KEEP list, and the rule "if
-   anything below conflicts with the camera or positions above, the camera and positions win".
-5. **Preservation score:** `preservation(video, brief) -> {score, items}`. Each must-preserve check is asked
-   (Decisions `noul`) on 3 frames of the generated clip. score = mean P(yes) over items; an item is kept when
-   P(yes) ≥ 0.5.
-6. **Hook in S12:** `reshoot(..., direction=None)` and `reshoot_best(..., direct=False, w_preserve=0.4)`. With
-   `direct=True`, the brief and direction are computed once, every take uses the directed prompt, and takes are
-   ranked by `(1 - w)·conformance + w·preservation`. Artifacts go in `<out>/direct/` (`brief.json`, `diff.json`,
-   `direction.json`).
+1. **Scene analyst** (`analyze_scene`, Argon HIGH, watches the ORIGINAL clip): `SceneBrief`: logline, intent,
+   timed beats per person (action, gaze/gesture, prop contact), performance (gait, pace, posture, emotion,
+   wardrobe), environment, physics, ≤ 8 **must-preserve** items, each with a yes/no visual check. People are named
+   by `visual_description`, never by id. Cached per clip.
+2. **Scene diff** (`scene_diff`, pure geometry): per actor path length, mean speed and **speed while moving**
+   (1 unit ≈ 1 m, as S12), gait, start/end, distance to the camera, nearest object at the end; added, removed and
+   moved entities; camera moves before/after (S12 `shot_facts`) and `camera.changed`.
+3. **Edit interpreter** (`interpret`, Hydrogen): map diff + optional free-text `request` → `ChangeSpec`: typed
+   changes (blocking, camera, timing, performance, environment, event, framing; source map|request), every
+   must-preserve item **locked or released** with a reason (`normalize_spec`: exactly one; released wins; default
+   locked), ≤ 6 success checks for requested changes, assumptions.
+4. **Director** (`direct`, Argon HIGH): brief + diff + spec → `Direction`: per-person adaptations (change →
+   physical reasoning → behaviour) from a general physics checklist, beat re-timing, how each LOCKED element
+   survives, conflicts + resolutions, `performance_prompt`, and `scene_changes_prompt` for requested non-body
+   changes.
+5. **Prompt** (`compose`): S12's geometric prompt first and verbatim, then sections in priority order: PERFORMANCE
+   (with the "camera and positions win" rule), REQUESTED CHANGES, CORRECTIONS, MUST KEEP (locked only), WARDROBE,
+   LIGHT (both skipped when the request changes them), SCENE. The lowest-priority sections are dropped to fit
+   `MAX_PROMPT_CHARS = 3400`; the base is never cut.
+6. **Scores** (Decisions `noul` on 3 frames): `preservation` = LOCKED items; `fulfilment` = success checks;
+   ranking = (1−w)·conformance + w·mean(preservation, fulfilment), w = 0.4.
+7. **Critic** (`critique`, Argon HIGH, watches the unlabelled take): accept | revise, with typed issues and 1–4
+   corrections sentences. `critic_rounds` = N adds at most N corrected takes and stops at "accept".
+8. **S12 hook** (opt-in; default unchanged): `reshoot(direction=Pack|(brief, Direction))`,
+   `reshoot_best(direct, score_preservation, w_preserve, request, critic_rounds)`; `request`/`critic_rounds`
+   imply `direct`. A failed Omni take is retried once with a compact prompt (`COMPACT_PROMPT_CHARS = 2800`).
+   Artifacts go in `<out>/direct/` (`brief`, `diff`, `change_spec`, `direction`, `critique_<r>` .json).
+   CLI: `godshot reshoot … --direct | --request "…" | --critic N | --preserve | --w-preserve`.
 
 ## Acceptance criteria
 - [x] Offline tests: diff facts, prompt assembly (the geometry text is kept verbatim), the ranking formula, and
       the default S12 behaviour unchanged (all S12 tests still pass).
-- [ ] Live: one Tears of Steel clip + an edited map → brief, direction and a directed re-shoot, with both
-      conformance and preservation reported.
+- [x] Live: one Tears of Steel clip + an edited map → brief, direction and a directed re-shoot, with both
+      conformance and preservation reported (4 live runs; see Notes).
 - [x] Directed vs undirected on the same edit: preservation is reported for both (a single clip is a signal, not
       a result). See Notes: 0.85 → 0.91.
 
@@ -91,3 +94,21 @@ the dramatic intent are lost, and nothing measures that loss.
   - The diff now also reports removed objects, `camera.changed`, and speed while moving.
   - `request` or `critic_rounds` imply `direct`. Defaults are unchanged: all 20 S12 tests pass.
 - Tests: `tests/test_direct.py`, 28 tests, offline (fake Gemini + fake Decisions + real tiny ffmpeg videos).
+- **Live demo runs** (`tos_158s`, S02 map; 1–2 takes + 1 critic round each; frame-check scores, so treat them as a
+  demo, not a measurement):
+
+  | edit | map | request | released | conformance | preservation | fulfilment |
+  |---|---|---|---|---|---|---|
+  | A | walk 8 m to the archway | limp + red emergency lights | none | 0.95 | 0.90 (6/6) | ❌ 0.48 (0/2) |
+  | B | walk to the booth + camera push-in 2.5 m | strong, unhurt + golden sunset | **shoulder rub** | **0.98** | 0.89 (5/5) | ✅ **0.88 (2/2)** |
+  | C | camera orbits 45° right + 3 m weary walk | dust on landing + glance up the rope | none | ❌ 0.59 | **0.92** (6/6) | ~0.57 (2/2) |
+
+  - **The critic loop works:** on B, take 1 had no sunset; the critic said so, and the corrected take 2 has golden
+    shafts from the high windows (fulfilment 0.64 → 0.88). It also caught real physics glitches (a second rope
+    dropping from nowhere, boots passing through a panel) and the missing orbit on C.
+  - **Omni limits seen:** (1) environment changes far from the reference frames (red light in a blue-grey hall)
+    were not rendered, even after correction; warm light near the archway's own glow was. (2) An orbit on this
+    tight, close-framed shot was ignored in all 3 takes (Prajesh's spike: arcs work on wide shots). Next: try
+    references without full frames for environment requests, and orbits on a wide shot (`tos_258s`).
+  - Omni's generic `INVALID_ARGUMENT` hit prompts of ~4.2k+ chars intermittently (both attempts on one 4.2k
+    prompt); all prompts ≤ ~3.2k passed → budget 3.4k, compact retry 2.8k.
