@@ -10,7 +10,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S03 | Geometry: projection math | Siva | S00 | 1:15 | done |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | 2:00 | done |
 | S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | in progress (code + offline tests done; live run pending `.env` + frames) |
-| S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | todo |
+| S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | in progress (code + unit tests + hardening done; live dev run finishing) |
 | S07 | Render: animated overhead map | Akash | S00 | 2:00 | done |
 | S08 | Compose: 9:16 reel | Akash | S07, S01 | 2:30 | todo |
 | S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | 5:00 | todo |
