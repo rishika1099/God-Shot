@@ -1,1 +1,66 @@
-/* S09 (Siva) */
+/* S09 (Siva): God-Shot UI. Dark, map colours match godshot/style.py. */
+:root {
+  --bg: #1e1f22; --panel: #2b2b2b; --line: #3a3a3a; --text: #e6e6e6; --muted: #9a9a9a;
+  --cam: #5ad65a; --pass: #5ad65a; --fail: #ff6b6b; --unc: #f0c05a; --accent: #4ea1ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+.mono { font-family: ui-monospace, Consolas, monospace; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); gap: 12px; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 18px; }
+.brand .tag { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 8px; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; margin-left: 4px; }
+.badge.offline { background: #4a3b10; color: var(--unc); }
+.badge.mock { background: #4a1f1f; color: var(--fail); }
+.badge.job { background: #1d3550; color: var(--accent); }
+
+main { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr); gap: 12px; padding: 12px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.left, .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.player { background: #000; border-radius: 8px; overflow: hidden; position: relative; aspect-ratio: 16 / 9; }
+.player video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); padding: 20px; text-align: center; }
+
+.timeline { display: flex; align-items: center; gap: 8px; }
+.timeline input[type=range] { flex: 1; }
+.seg { color: var(--cam); font-weight: 600; font-size: 12px; letter-spacing: .04em; white-space: nowrap; }
+
+.mapwrap { background: var(--panel); border-radius: 8px; padding: 6px; }
+#map { width: 100%; height: 460px; display: block; cursor: crosshair; touch-action: none; }
+.legend { color: var(--muted); font-size: 12px; padding: 4px 6px 2px; }
+
+.card { background: var(--panel); border-radius: 8px; padding: 10px 12px; }
+.card h3 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.tab { padding: 4px 10px; border-radius: 6px; background: #343434; cursor: pointer; border: 1px solid transparent; }
+.tab.active { border-color: var(--accent); }
+.tab .rate { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.stats { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.checks { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; }
+.checks li { display: grid; grid-template-columns: 18px 110px 1fr; gap: 6px; padding: 4px 2px;
+  border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: default; }
+.checks li:hover { background: #333; }
+.v-pass { color: var(--pass); } .v-fail { color: var(--fail); } .v-uncertain, .v-none { color: var(--unc); }
+.checks .tpl { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+.lowconf { margin: 0; padding-left: 18px; color: var(--unc); font-size: 13px; }
+
+.row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.row input[type=range] { flex: 1; }
+.row input[type=number] { width: 64px; }
+.row input[type=text] { flex: 1; min-width: 160px; }
+input, select, button { background: #1f1f1f; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 8px; font: inherit; }
+.btn { cursor: pointer; background: #383838; border: 1px solid #4a4a4a; border-radius: 6px; padding: 6px 12px; }
+.btn:hover { background: #444; }
+.btn.small { padding: 4px 10px; }
+.btn.primary { background: #23507f; border-color: #2f6aa8; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.buttons { margin-top: 4px; }
+.msg { font-size: 12.5px; color: var(--muted); min-height: 1.4em; white-space: pre-wrap; }
+.msg.err { color: var(--fail); }
+.thumb { position: fixed; pointer-events: none; width: 320px; border: 2px solid var(--line); border-radius: 6px;
+  display: none; z-index: 10; background: #000; }

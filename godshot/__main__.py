@@ -128,9 +128,21 @@ def eval_(split: str = "test", system: str = "full") -> None:
 
 
 @app.command()
-def web() -> None:
-    """Start the local UI on :8000 (S09)."""
-    raise NotImplementedError("S09")
+def web(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    mock: bool = typer.Option(False, "--mock", help="Seed out/mock_001 from mocks/ (marked MOCK)."),
+) -> None:
+    """Start the local UI on :8000 (S09). GODSHOT_OFFLINE=1 → read-only cached demo."""
+    import uvicorn
+
+    from godshot.web.app import app as web_app
+    from godshot.web.app import seed_mock_run
+
+    if mock:
+        typer.echo(f"seeded {seed_mock_run()}")
+    typer.echo(f"God-Shot UI: http://{host}:{port}")
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
 
 
 def main() -> None:
