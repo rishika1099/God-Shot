@@ -39,3 +39,14 @@ cb_037,camerabench,CC BY 4.0 (syCen/CameraBench; numbers only),test,handheld,6.7
 cb_038,camerabench,CC BY 4.0 (syCen/CameraBench; numbers only),test,easy,8.50,eval/clips/cb_038.mp4
 cb_039,camerabench,CC BY 4.0 (syCen/CameraBench; numbers only),test,easy,5.57,eval/clips/cb_039.mp4
 cb_040,camerabench,CC BY 4.0 (syCen/CameraBench; numbers only),test,easy,6.14,eval/clips/cb_040.mp4
+tos_001,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),dev,easy,9.00,eval/clips/tos_001.mp4
+tos_002,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),dev,easy,7.00,eval/clips/tos_002.mp4
+tos_003,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),dev,easy,9.00,eval/clips/tos_003.mp4
+tos_004,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),dev,easy,9.00,eval/clips/tos_004.mp4
+tos_005,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,8.50,eval/clips/tos_005.mp4
+tos_006,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,9.50,eval/clips/tos_006.mp4
+tos_007,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,7.50,eval/clips/tos_007.mp4
+tos_008,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,9.00,eval/clips/tos_008.mp4
+tos_009,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,8.50,eval/clips/tos_009.mp4
+tos_010,tears_of_steel,CC BY 3.0 (Blender Foundation — Tears of Steel),test,easy,8.50,eval/clips/tos_010.mp4
+sintel_001,sintel,CC BY 3.0 (Blender Foundation — Sintel),dev,easy,5.90,eval/clips/sintel_001.mp4
