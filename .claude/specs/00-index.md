@@ -2,22 +2,22 @@
 
 Update your row when you start (`in progress`) and finish (`done`).
 
-| Spec | Title | Owner | Depends on | Status |
-|---|---|---|---|---|
-| S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | done |
-| S01 | Ingest: upload + frames | Prajesh | S00 | done |
-| S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | todo |
-| S03 | Geometry: projection math | Siva | S00 | done |
-| S04 | Checks: scene → check.v1 | Rishika | S03 | todo |
-| S05 | Verify: Decisions API client | Siva | S04, S01 | todo |
-| S06 | Correct + loop controller | Rishika | S02, S05 | todo |
-| S07 | Render: animated overhead map | Akash | S00 | todo |
-| S08 | Compose: 9:16 reel | Akash | S07, S01 | todo |
-| S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | todo |
-| S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | todo |
-| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | todo |
-| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | todo |
-| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | todo |
+| Spec | Title | Owner | Depends on | Target | Status |
+|---|---|---|---|---|---|
+| S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | 12:30 | done |
+| S01 | Ingest: upload + frames | Prajesh | S00 | 1:00 | done |
+| S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | 1:45 | todo |
+| S03 | Geometry: projection math | Siva | S00 | 1:15 | done |
+| S04 | Checks: scene → check.v1 | Rishika | S03 | 2:00 | done |
+| S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | todo |
+| S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | todo |
+| S07 | Render: animated overhead map | Akash | S00 | 2:00 | todo |
+| S08 | Compose: 9:16 reel | Akash | S07, S01 | 2:30 | todo |
+| S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | 5:00 | todo |
+| S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | todo |
+| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | todo |
+| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | todo |
+| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | todo |
 
 ## Notes
 - 2026-11-21: S04/S06 reassigned to Rishika; S05 stays with Siva.
