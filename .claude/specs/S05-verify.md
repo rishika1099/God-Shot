@@ -1,7 +1,7 @@
 # S05: Verify (Decisions API client)
 
 - **Owner:** Siva
-- **Status:** todo
+- **Status:** in progress (code + offline tests done; live run needs `.env` + real dev frames)
 - **Depends on:** S04, S01
 - **Models:** `MODEL_VERIFY` = gemini-decision-1 via `client.decisions.create` (`api_version="v1beta"`). VERIFY the request/response field names in the docs first.
 
@@ -28,9 +28,34 @@ Answer every question against the real frames, fast and in batches. Store RAW an
 - [ ] Verifies the mock checks on 2 real dev-clip frames end to end; latency per request is logged.
 - [ ] A 50-check clip verifies in < 10 s wall time.
 - [ ] The threshold values come from config; tuning on dev clips is recorded in Notes (final values + why).
-- [ ] Mirrored controls report yes-bias = mean p_yes on control checks.
-- [ ] Offline test: verifying the same checks twice makes zero new API calls; two checks with the same qkey cause one question in the request.
-- [ ] `observed` / `compare` unit tests cover: thresholds at the boundaries, choice top=`other` → `None`, `pred=None` vs confident `obs` → `fail`.
+- [x] Mirrored controls report yes-bias = mean p_yes on control checks.
+- [x] Offline test: verifying the same checks twice makes zero new API calls; two checks with the same qkey cause one question in the request.
+- [x] `observed` / `compare` unit tests cover: thresholds at the boundaries, choice top=`other` → `None`, `pred=None` vs confident `obs` → `fail`.
 
 ## Notes / changelog
--
+- 2026-11-21 (Siva): implemented `godshot/verify.py` + `tests/test_verify.py` (35 offline tests; a fake client replays
+  the answers recorded in `mocks/checks_mock.json` and reproduces every mock verdict).
+  - Public API as specced: `verify`, `observed`, `compare`, `attach`, `summary`, `ask`, plus `check_context(check)`
+    (the text prefix shown before the images; S12 can reuse it).
+  - Additive keyword args (not contract changes): `verify(..., client=None)` and `ask(..., client=None)` for test
+    injection; `attach(..., predict=None)` defaults to `godshot.checks.predict` (S04), imported lazily so S05 works
+    before S04 lands.
+  - Wire format checked in the installed SDK (google-genai 3.6.1, `_gaos/types/decisions`): image block =
+    `{"type": "image", "mime_type": "image/jpeg", "data": <base64 str>}`; `model` must be `models/<id>`; answers in
+    `resp.answers[qid]` with `.noul` / `.probabilities` + `.confidence`. Request question ids are `q0, q1, ...`
+    (the model never sees them).
+  - Cache: one entry per QUESTION (kind `decisions`), key = model + full `Question.to_api()` JSON + context text +
+    raw image bytes. Slightly stricter than the spec (adds criteria/options and context) so two questions that differ
+    only in criteria can't share an answer. Un-cached questions for the same input still go in one request.
+    `GODSHOT_OFFLINE=1` → `CacheMiss` on any miss.
+  - Frame paths: absolute, else `frames_dir / path`, else `frames_dir / basename`. Missing frame → `FileNotFoundError`.
+  - Images ≤ 768 px wide: JPEGs at or under that are sent as-is; anything else is re-encoded/downscaled with Pillow.
+  - Errors: the SDK already retries internally; on top of that, one retry on 429/5xx with 2–3 s backoff, then raise.
+    Other 4xx (e.g. a wrong model id) raise immediately. A question with no usable answer is logged and left out of the
+    result (`attach` → `result=None`, `summary` counts it as uncertain).
+  - `summary` adds `yes_bias` (mean p_yes over `control` checks; None if none). `pass_rate` is None when nothing was
+    decided.
+  - Latency: logged per request (`decisions: N question(s), K image(s) in X s`) and per `verify` call.
+  - Still open: the live end-to-end run on 2 real dev-clip frames and the < 10 s wall-time check for a 50-check clip
+    need the team `.env` + S01 frames. A fake-latency test shows the 8-worker pool runs 16 requests in parallel.
+    Thresholds are still the defaults (0.7 / 0.3) from config; tune on dev clips and record the values here.
