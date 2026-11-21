@@ -58,17 +58,73 @@ def test_apply_preset_preview_does_not_save(client: TestClient, tmp_path: Path) 
     assert bad.status_code == 400
 
 
-def test_edit_saves_and_reports_pending_render(client: TestClient, tmp_path: Path) -> None:
+@pytest.fixture
+def fake_render(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Stand-ins for S07 render_map / S08 compose_reel (no ffmpeg needed); records calls."""
+    from godshot import compose, render
+
+    calls: list[dict] = []
+
+    def render_map(scene, out, fps=None, size=(1080, 960), ghost=None):
+        calls.append({"fn": "render_map", "out": Path(out).name, "ghost": ghost is not None})
+        Path(out).write_bytes(b"map")
+        return Path(out)
+
+    def compose_reel(clip, map_mp4, out, title=None, credit=None):
+        calls.append({"fn": "compose_reel", "clip": Path(clip).name, "map": Path(map_mp4).name})
+        Path(out).write_bytes(b"reel")
+        return Path(out)
+
+    monkeypatch.setattr(render, "render_map", render_map)
+    monkeypatch.setattr(compose, "compose_reel", compose_reel)
+    return calls
+
+
+def test_edit_saves_even_when_render_is_unavailable(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import render
+
+    def no_ffmpeg(*a, **k):
+        raise render.RenderError("ffmpeg not found on PATH.")
+
+    monkeypatch.setattr(render, "render_map", no_ffmpeg)
     scene = client.get("/api/run/mock_001").json()["scene"]
     scene["camera"]["hfov_deg"] = 50
     r = client.post("/api/run/mock_001/edit", json={"scene": scene})
     assert r.status_code == 200
     body = r.json()
-    assert body["saved"] == "scene_edit_1.json" and body["render"] == "pending"
-    assert (tmp_path / "out" / "mock_001" / "scene_edit_1.json").exists()
+    assert body["saved"] == "scene_edit_1.json" and body["render"] == "error" and "ffmpeg" in body["note"]
+    assert (tmp_path / "out" / "mock_001" / "scene_edit_1.json").exists()  # the edit is never lost
     r2 = client.post("/api/run/mock_001/edit", json={"edit": {"op": "set_fov", "hfov_deg": 70}})
     assert r2.json()["saved"] == "scene_edit_2.json"
     assert client.get("/api/run/mock_001").json()["scene_edit"]["camera"]["hfov_deg"] == 70
+
+
+def test_edit_renders_map_and_reel_with_ghost(
+    client: TestClient, tmp_path: Path, fake_render: list[dict]
+) -> None:
+    d = tmp_path / "out" / "mock_001"
+    (d / "clip.mp4").write_bytes(b"clip")
+    r = client.post(
+        "/api/run/mock_001/edit",
+        json={"edit": {"op": "preset", "move": "arc_right", "t0": 0, "t1": 10, "target": "a1"}},
+    )
+    body = r.json()
+    assert body["render"] == "ok" and body["reel_url"].startswith("/out/mock_001/reel_edit_1.mp4")
+    assert fake_render == [
+        {"fn": "render_map", "out": "map_edit_1.mp4", "ghost": True},
+        {"fn": "compose_reel", "clip": "clip.mp4", "map": "map_edit_1.mp4"},
+    ]
+    run = client.get("/api/run/mock_001").json()
+    assert run["reel_edit_url"].startswith("/out/mock_001/reel_edit_1.mp4")
+    assert run["clip_url"].startswith("/out/mock_001/clip.mp4")
+
+
+def test_edit_without_clip_renders_map_only(client: TestClient, fake_render: list[dict]) -> None:
+    body = client.post("/api/run/mock_001/edit", json={"edit": {"op": "set_fov", "hfov_deg": 40}}).json()
+    assert body["render"] == "map_only" and body["map_url"].startswith("/out/mock_001/map_edit_1.mp4")
+    assert [c["fn"] for c in fake_render] == ["render_map"]
 
 
 def test_text_edit_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

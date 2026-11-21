@@ -366,6 +366,7 @@ async function saveAndRender(promise, label) {
     S.scene = res.scene;
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     if (res.reel_url) { setVideo(res.reel_url); msg(`Saved ${res.saved}; new reel in ${secs}s.`); }
+    else if (res.map_url) { setVideo(res.map_url); msg(`Saved ${res.saved}; new map video in ${secs}s (no clip to stack).`); }
     else msg(`Saved ${res.saved} in ${secs}s. ${res.note || ""}`.trim());
   } catch (e) { msg(e.message, true); }
 }

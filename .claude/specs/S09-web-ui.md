@@ -65,5 +65,11 @@ A local web page to run the pipeline, watch the verify loop, view the reel, edit
   - **`--mock`** seeds `out/mock_001` from `mocks/` with a `MOCK` marker; the UI shows a red "MOCK DATA" badge.
   - Gotcha (Windows): non-ASCII in CLI output crashes on the cp1252 console; the web command prints ASCII only.
     `godshot smoke` (S00) still prints "→": run it with `PYTHONIOENCODING=utf-8` on Windows.
+  - 2026-11-21 integration with merged S07 (#6): every move preset's output, with the original as `ghost`, renders
+    through `render.render_frame` at 1080×960. S07 runs at ~92 frames/s on this laptop with the prepared
+    background (a 10 s clip = 240 frames ≈ 2.6 s before ffmpeg encoding), so the < 30 s re-render target is
+    realistic. `compose_reel(clip, map_mp4, out)` on `akash/s08-compose` matches the call here. Without ffmpeg,
+    re-render saves the edit and answers `render: "error"` with S07's "ffmpeg not found" note; with no clip it
+    answers `map_only` and the page plays the map video. Tests use fake render/compose (no ffmpeg needed).
   - Still open: acceptance 1 (cached demo of 2 real runs with Wi-Fi off) needs 2 real S06 runs; acceptance 2
     (new reel < 30 s) needs S07/S08. Not yet checked in a real browser by a human.
