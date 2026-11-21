@@ -20,6 +20,13 @@ needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg
 W, H = 320, 180
 
 
+@pytest.fixture(autouse=True)
+def _no_network_beats(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test offline: reshoot() would otherwise upload the clip to watch its performance."""
+    if "real_beats" not in request.keywords:
+        monkeypatch.setattr(reshoot, "performance_beats", lambda *a, **k: [])
+
+
 def _scene(yaw_end: float = 0.0, box_at: tuple[float, float] = (-2.0, 6.0), duration: float = 2.0) -> SceneV1:
     keys = [
         {"t": t, "mmss": mmss(t), "x": 0.0, "y": 0.0, "yaw_deg": yaw_end * t / duration}
@@ -362,3 +369,133 @@ def test_conformance_prefers_unlabelled_raw(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(verify_mod, "verify", lambda bank, frames_dir: {})
     r = reshoot.conformance(labelled, scene, work_dir=tmp_path / "c")
     assert r["source"] == str(raw) and r["usable"] == 0
+
+
+# --------------------------------------------------------------------------- full length + performance
+
+
+BEATS = [
+    {"t0": 0.0, "t1": 3.0, "who": "the man in the red hoodie", "action": "waves at someone off-screen"},
+    {"t0": 3.0, "t1": 6.5, "who": "the man in the red hoodie", "action": "turns his head left and laughs"},
+]
+
+
+@needs_ffmpeg
+def test_reshoot_keeps_the_original_length_by_default(
+    orig_clip: Path, fake_omni: FakeInteractions, tmp_path: Path
+) -> None:
+    from godshot import ingest
+
+    fake_omni.video = orig_clip.read_bytes()
+    scene = SceneV1.load(MOCK)  # 10 s
+    out = reshoot.reshoot(orig_clip, scene, scene, tmp_path / "full.mp4")
+    meta = json.loads((reshoot.work_dir_for(out) / "reshoot.json").read_text())
+    assert meta["source_duration_s"] == 10.0 and meta["duration_s"] == 10.0 and meta["time_scale"] == 1.0
+    assert ingest.probe(reshoot.work_dir_for(out) / "blockout.mp4").duration_s == pytest.approx(
+        10.0, abs=0.15
+    )
+    assert "A 10-second shot" in fake_omni.kwargs["input"][-1]["text"]
+
+
+@needs_ffmpeg
+def test_reshoot_too_long_is_time_scaled_not_cut(
+    orig_clip: Path, fake_omni: FakeInteractions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import ingest
+
+    fake_omni.video = orig_clip.read_bytes()
+    monkeypatch.setattr(reshoot, "OMNI_EDIT_MAX_S", 5.0)
+    scene = SceneV1.load(MOCK)  # 10 s → must fit 5 s
+    out = reshoot.reshoot(orig_clip, scene, scene, tmp_path / "fit.mp4")
+    meta = json.loads((reshoot.work_dir_for(out) / "reshoot.json").read_text())
+    assert meta["time_scale"] == 2.0 and meta["duration_s"] == 5.0 and meta["shot_duration_s"] == 10.0
+    assert ingest.probe(reshoot.work_dir_for(out) / "blockout.mp4").duration_s == pytest.approx(5.0, abs=0.15)
+    text = fake_omni.kwargs["input"][-1]["text"]
+    assert (
+        "A 5-second shot" in text and "00:02–00:04: the camera pans left" in text
+    )  # whole shot, times halved
+
+
+@needs_ffmpeg
+def test_text_mode_length_is_clamped_to_omni_range(
+    orig_clip: Path, fake_omni: FakeInteractions, tmp_path: Path
+) -> None:
+    fake_omni.video = orig_clip.read_bytes()
+    scene = SceneV1.load(MOCK)
+    out = reshoot.reshoot(orig_clip, scene, scene, tmp_path / "t.mp4", mode="text")
+    meta = json.loads((reshoot.work_dir_for(out) / "reshoot.json").read_text())
+    assert fake_omni.kwargs["response_format"]["duration"] == "8s" and meta["time_scale"] == 1.25
+
+
+def test_prompt_keeps_the_performance_and_only_changes_the_camera() -> None:
+    scene = SceneV1.load(MOCK)
+    text = reshoot.edit_prompt(scene, reshoot.blockout_palette(scene), beats=BEATS)
+    assert "they do NOT show the performance" in text
+    assert "Change ONLY the camera position, angle, point of view and field of view" in text
+    assert "Performance (keep EXACTLY as in the original clip; only the camera changes):" in text
+    assert "00:00.00–00:03.00: the man in the red hoodie waves at someone off-screen" in text
+    assert "no zoom" not in text and "stays in place" not in text
+
+
+def test_fov_edit_is_described_as_a_zoom() -> None:
+    scene = SceneV1.load(MOCK)
+    data = scene.model_dump(by_alias=True)
+    data["camera"]["hfov_deg"] = 35
+    tighter = reshoot.describe_shot(SceneV1.model_validate(data), orig_hfov=60)
+    assert (
+        "Lens: a 35° horizontal field of view instead of the original 60° (tighter framing, like zooming in)."
+        in tighter
+    )
+    assert "Lens:" not in reshoot.describe_shot(scene, orig_hfov=60)  # unchanged FOV → no lens line
+
+
+@pytest.mark.real_beats
+def test_performance_beats_parses_caches_and_clamps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from godshot import ingest
+
+    monkeypatch.setenv("GODSHOT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("GODSHOT_OFFLINE", raising=False)
+    load_config.cache_clear()
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"clip bytes")
+    calls = {"upload": 0, "gen": 0}
+    monkeypatch.setattr(
+        ingest, "upload", lambda c: calls.__setitem__("upload", calls["upload"] + 1) or "files/x"
+    )
+    payload = {"beats": [
+        {"t0": 4.0, "t1": 30.0, "who": "the man in the red hoodie", "action": "sits down"},
+        {"t0": 0.5, "t1": 2.0, "who": "the man in the red hoodie", "action": "waves"},
+        {"t0": 1.0, "t1": 1.5, "who": "x", "action": "   "},
+    ]}  # fmt: skip
+
+    def generate_content(**kw):
+        calls["gen"] += 1
+        assert kw["config"].response_mime_type == "application/json"
+        return SimpleNamespace(text=json.dumps(payload))
+
+    monkeypatch.setattr(
+        reshoot,
+        "get_client",
+        lambda: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)),
+    )
+    scene = SceneV1.load(MOCK)
+    beats = reshoot.performance_beats(clip, scene)
+    assert [b["action"] for b in beats] == ["waves", "sits down"]  # sorted, blank dropped
+    assert beats[1]["t1"] == 10.0  # clamped to the clip
+    assert reshoot.performance_beats(clip, scene) == beats and calls == {"upload": 1, "gen": 1}  # cached
+    load_config.cache_clear()
+
+
+@pytest.mark.real_beats
+def test_performance_beats_failure_falls_back_to_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import ingest
+
+    monkeypatch.setenv("GODSHOT_CACHE_DIR", str(tmp_path / "cache"))
+    load_config.cache_clear()
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(ingest, "upload", lambda c: (_ for _ in ()).throw(RuntimeError("no network")))
+    assert reshoot.performance_beats(clip, SceneV1.load(MOCK)) == []
+    load_config.cache_clear()

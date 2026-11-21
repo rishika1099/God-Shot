@@ -34,3 +34,4 @@ ignore = ["RUF001", "RUF002", "RUF003"]  # allow → and – in strings/comments
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["real_beats: run the real performance_beats() (with fakes) instead of the offline stub"]

@@ -154,7 +154,9 @@ def reshoot(
     n: int = typer.Option(1, "--n", help="Takes to generate; the best by conformance is kept."),
     mode: str = typer.Option("blockout", "--mode", help="blockout (map-exact guide) | text (fallback)."),
     resolution: str = typer.Option("360p", "--resolution"),
-    duration: str = typer.Option("8s", "--duration", help="Max length; the guide is cut to this."),
+    duration: str | None = typer.Option(
+        None, "--duration", help="Cap, e.g. 6s (default: the original clip's length)."
+    ),
 ) -> None:
     """Edited map → AI-generated re-shoot + conformance score (S12)."""
     from pathlib import Path
