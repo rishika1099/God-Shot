@@ -7,7 +7,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S00 | Foundation: config, schema, cache, CLI, mocks | Prajesh | none | done |
 | S01 | Ingest: upload + frames | Prajesh | S00 | done |
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | todo |
-| S03 | Geometry: projection math | Siva | S00 | todo |
+| S03 | Geometry: projection math | Siva | S00 | done |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | todo |
 | S05 | Verify: Decisions API client | Siva | S04, S01 | todo |
 | S06 | Correct + loop controller | Rishika | S02, S05 | todo |
