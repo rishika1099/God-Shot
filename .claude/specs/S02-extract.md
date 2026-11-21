@@ -1,7 +1,7 @@
 # S02: Extract (Argon → scene.v1; this IS the baseline)
 
 - **Owner:** Akash
-- **Status:** in review (live-tested; path-direction criterion 1/2, prompt untuned)
+- **Status:** merged (#7); follow-up (motion labels from the track + cut detection) in review. Path-direction criterion still 1/2, prompt untuned
 - **Depends on:** S00, S01
 - **Models:** `MODEL_EXTRACT` = gemini-4-argon, static video processing, `fps=cfg.FPS` (4), `thinking_level=MEDIUM`, JSON schema enforced
 
@@ -52,7 +52,7 @@ Give each element a confidence in [0,1]; lower it when guessing (occlusion, dark
 - [x] Median latency per 10 s clip is logged (`latency_s_per_10s` per clip in `loop_log.json`). Live: 27.1 / 49.5 / 23.9 s per 10 s of clip, **median 27.1 s**.
 
 ## Notes / changelog
-- 2026-11-21 (Akash): built `extract.py`, `prompts/extract.md` (spec starting text, untuned), CLI `baseline`, `tests/test_extract.py` (20 offline tests, fixture `tests/fixtures/extract_response.json`).
+- 2026-11-21 (Akash): built `extract.py`, `prompts/extract.md` (spec starting text, untuned), CLI `baseline`, `tests/test_extract.py` (16 offline tests at first; 36 after the follow-up below, fixture `tests/fixtures/extract_response.json`).
 - S01 is merged; `extract._probe/_upload` call `godshot.ingest` directly (a temporary stand-in was used before S01 landed and has been removed). `ingest.upload` has its own 40 h URI cache, and `ingest.probe` rejects clips > 35 s.
 - Cache key = `[clip_bytes, MODEL_EXTRACT, prompt, {fps, thinking_level, schema}]`; the upload happens inside the miss path, so a cache hit makes zero network calls. The repair call is cached separately (`kind=extract_repair`).
 - Cached payload = `{text, usage, latency_s}`; on a hit, the logged latency is the original call's latency and `cached_calls` counts the hit.
@@ -72,3 +72,8 @@ Give each element a confidence in [0,1]; lower it when guessing (occlusion, dark
   - Argon reported no `thoughts_token_count` at MEDIUM.
   - Tuning ideas (DEV only): ask for the motion enums to be derived from the numeric track (yaw sign ↔ pan direction); spell out "orbit = position moves on a circle AND yaw turns"; add a worked forward-dolly example.
 - **Bug fixed during the live run:** `get_client().models.generate_content(...)` on a temporary `Client` failed with "Cannot send a request, as the client has been closed": the Client is garbage-collected mid-call and closes its httpx client. `_generate` now holds `client = get_client()`. **Heads-up for S05/S06/S12:** don't call methods on a temporary `get_client()`.
+- **Follow-up (2026-11-21): motion segments from the track + cut detection.**
+  - `derive_motion_segments` (in `postprocess`) **replaces** the model's `motion_segments` with labels computed from the camera track: 1 s windows → `geometry.camera_motion` → `classify_motion`, with equal neighbours merged. Rotation: |dyaw| ≥ 8°/s → pan_left/right. Translation: movement ≥ max(0.15 units/s, 5% of the scene distance per second), else static. Mostly sideways while turning back toward the subject → arc_*; otherwise the dominant axis → dolly/truck. `handheld_drift` is never derived. When the derived labels differ from the model's, the model's originals go into `model_notes`. Labels can no longer contradict the map (the orbit said `pan_left` while its yaw turned right).
+  - `detect_cuts(clip)`: ffmpeg `scene` score > 0.2 on a 320 px proxy, ignoring the first/last 0.1 s. On the test clips, 0.15–0.2 separated the 5 real cuts from a fast orbit (0 false positives), while 0.3 missed every cut. `mark_cuts` adds a low-confidence `camera` range of ±0.5 s per cut (`failed_checks: ["cut_detected"]`) and a note. Clips are not rejected; S07 shows the dimmed wedge and "?" badge there.
+  - Re-run from cache (no API calls): orbit rotation is now `pan_right` throughout (matches the frames). Walk goes from the wrong `truck_left → dolly_out` to `static` (less wrong, still not "forward": a prompt problem). cuts15: 4 cuts flagged (the 5th, at 14.89 s, falls inside the end margin).
+  - **Model error found:** on the orbit, Argon's position path curves **counterclockwise** while its yaw turns **clockwise**. These are inconsistent: an orbit faces its centre, so position and yaw turn the same way. The derived translation therefore flickers truck/dolly/arc between windows. That faithfully reports the inconsistent track, so I did not smooth it. Fix it upstream: a prompt rule ("when orbiting, position and yaw rotate the same way"), and S06's verify/correct loop.
