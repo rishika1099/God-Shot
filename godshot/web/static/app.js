@@ -8,7 +8,7 @@ const S = {
   runId: null, run: null, orig: null, scene: null, waypoints: [],
   t: 0, playing: false, lastTick: 0, round: null,
   sel: { cam: null, actor: null }, drag: null, hover: null, view: null, offline: false, jobTimer: null,
-  tool: "select", loop: true, curveMode: true, actorDragMode: "key", sceneLocked: false,
+  tool: "select", loop: true, curveMode: true, actorDragMode: "all", sceneLocked: false,
   orbitDir: 1, orbitSweep: 360, orbitRadius: null, lastOrbitAnchor: null,
   drawStroke: null, orbitDraft: null, undo: [], redo: [],
   kfDrag: null,
@@ -119,8 +119,8 @@ function bakeCameraCurve() {
   const dur = roundN(S.orig?.clip.duration_s || wps[wps.length - 1].t, 3);
   const autoAim = $("autoAim")?.checked;
   const tid = lockedTargetId();
-  const aimAt = (x, y, t, fallbackYaw) => {
-    if (autoAim && tid) {
+  const aimAt = (x, y, t, fallbackYaw, customYaw = false) => {
+    if (!customYaw && autoAim && tid) {
       const tgt = entityPosAt(S.scene, tid, t);
       if (tgt) return yawTowards(x, y, tgt.x, tgt.y);
     }
@@ -132,26 +132,28 @@ function bakeCameraCurve() {
     // Smoothly sample even 2-point moves so Look-At tracks cleanly along the line
     if (wps.length === 1) {
       const k = wps[0];
-      const yaw0 = aimAt(k.x, k.y, k.t, k.yaw_deg);
+      const yaw0 = aimAt(k.x, k.y, k.t, k.yaw_deg, k.customYaw);
       baked.push({ t: roundN(k.t, 3), mmss: mmss(k.t), x: roundN(k.x, 4), y: roundN(k.y, 4), yaw_deg: roundN(wrap180(yaw0), 3) });
     } else {
       for (let i = 0; i < wps.length - 1; i++) {
         const a = wps[i], b = wps[i + 1];
+        const useCustom = Boolean(a.customYaw || b.customYaw);
         const steps = Math.max(2, Math.min(8, Math.ceil((b.t - a.t) / 0.5)));
         for (let s = 0; s < steps; s++) {
           const u = s / steps, t = roundN(lerp(a.t, b.t, u), 3);
           const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
-          const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u));
+          const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u), useCustom);
           baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
         }
       }
       const last = wps[wps.length - 1];
-      const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg);
+      const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg, last.customYaw);
       baked.push({ t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4), yaw_deg: roundN(wrap180(lastYaw), 3) });
     }
   } else {
     for (let i = 0; i < wps.length - 1; i++) {
       const a = wps[i], b = wps[i + 1];
+      const useCustom = Boolean(a.customYaw || b.customYaw);
       const p1 = [a.x, a.y], p2 = [b.x, b.y];
       const p0 = i > 0 ? [wps[i - 1].x, wps[i - 1].y] : [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
       const p3 = i + 2 < wps.length ? [wps[i + 2].x, wps[i + 2].y] : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
@@ -162,12 +164,12 @@ function bakeCameraCurve() {
         const u = s / steps;
         const t = roundN(lerp(a.t, b.t, u), 3);
         const [x, y] = catmullRom2D(p0, p1, p2, p3, u);
-        const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u));
+        const yaw = aimAt(x, y, t, lerpAngle(a.yaw_deg, b.yaw_deg, u), useCustom);
         baked.push({ t, mmss: mmss(t), x: roundN(x, 4), y: roundN(y, 4), yaw_deg: roundN(wrap180(yaw), 3) });
       }
     }
     const last = wps[wps.length - 1];
-    const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg);
+    const lastYaw = aimAt(last.x, last.y, last.t, last.yaw_deg, last.customYaw);
     baked.push({
       t: roundN(last.t, 3), mmss: mmss(last.t), x: roundN(last.x, 4), y: roundN(last.y, 4),
       yaw_deg: roundN(wrap180(lastYaw), 3),
@@ -176,8 +178,9 @@ function bakeCameraCurve() {
 
   // Hold final camera position through end of clip (never snap back to Start!)
   const tail = baked[baked.length - 1];
+  const lastWp = wps[wps.length - 1];
   if (tail && tail.t < dur - 0.05) {
-    const endYaw = aimAt(tail.x, tail.y, dur, tail.yaw_deg);
+    const endYaw = aimAt(tail.x, tail.y, dur, tail.yaw_deg, lastWp?.customYaw);
     baked.push({ t: dur, mmss: mmss(dur), x: tail.x, y: tail.y, yaw_deg: roundN(wrap180(endYaw), 3) });
   }
   S.scene.camera.track = baked;
@@ -1087,7 +1090,11 @@ if ($("aimTarget")) $("aimTarget").onchange = () => {
   if (S.lastOrbitAnchor && S.scene) { pushUndo(); buildOrbitTrack({ entityId: lockedTargetId() }, S.orbitSweep, S.orbitDir, S.orbitRadius); }
   else if ($("autoAim")?.checked && S.scene) { bakeCameraCurve(); }
 };
-if ($("autoAim")) $("autoAim").onchange = () => { if (S.scene) bakeCameraCurve(); };
+if ($("autoAim")) $("autoAim").onchange = () => {
+  if (!S.scene) return;
+  if ($("autoAim").checked) { for (const k of S.waypoints) k.customYaw = false; }
+  bakeCameraCurve();
+};
 if ($("addKeyBtn")) $("addKeyBtn").onclick = () => { if (S.scene) { const c = camAt(S.scene, S.t); addKeyframeAt(c.x, c.y, S.t); } };
 if ($("delKeyBtn")) $("delKeyBtn").onclick = deleteSelectedKey;
 if ($("undoBtn")) $("undoBtn").onclick = doUndo;
@@ -1575,9 +1582,9 @@ canvas.addEventListener("pointermove", (ev) => {
     clearFutureAutoWaypoints(d.index);
     bakeCameraCurve();
   } else if (d.kind === "cam_aim") {
-    if ($("autoAim")?.checked) $("autoAim").checked = false;
     const k = S.waypoints[d.index];
     k.auto = false;
+    k.customYaw = true;
     k.yaw_deg = r(yawTowards(k.x, k.y, wx, wy));
     clearFutureAutoWaypoints(d.index);
     bakeCameraCurve();
