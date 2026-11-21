@@ -16,7 +16,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | 5:00 | in progress (UI + editor + API done; reels need S07/S08) |
 | S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | in progress (40 CameraBench mapped + 11 Blender clips trimmed; labeling next) |
 | S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | in progress (charts notebook ready) |
-| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | todo |
+| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | in progress (code done + tested; awaiting S09 wiring) |
 | S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | todo |
 
 ## Notes

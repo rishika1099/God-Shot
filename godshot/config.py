@@ -92,8 +92,14 @@ def load_config(require_key: bool = False) -> Config:
     )
 
 
+@lru_cache(maxsize=1)
 def get_client() -> genai.Client:
-    """genai.Client on v1beta (needed for the Decisions API). Raises ConfigError without a key."""
+    """Shared genai.Client on v1beta (needed for the Decisions API). Raises ConfigError without a key.
+
+    One client per process: a client that is garbage-collected closes its HTTP connection, which broke
+    lazy pagers like `get_client().models.list()`. The client is thread-safe (S05 uses a thread pool).
+    Tests that change the key should call `get_client.cache_clear()`.
+    """
     from google import genai
 
     cfg = load_config(require_key=True)
