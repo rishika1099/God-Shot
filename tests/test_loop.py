@@ -7,7 +7,12 @@ import json
 from pathlib import Path
 
 from godshot.checks import make_checks, predict
-from godshot.correct import build_correction_prompt, freeze_identity, mark_low_confidence
+from godshot.correct import (
+    _validate_scene_json,
+    build_correction_prompt,
+    freeze_identity,
+    mark_low_confidence,
+)
 from godshot.pipeline import run_loop
 from godshot.schema import (
     Actor,
@@ -385,3 +390,12 @@ def test_transient_error_on_round2_preserves_round1(tmp_path: Path) -> None:
     assert final.entity("door_1").center[0] == 2.0  # type: ignore[union-attr]
     assert (tmp_path / "out" / "scene_final.json").exists()
     assert (tmp_path / "out" / "loop_log.json").exists()
+
+
+def test_validate_scene_json_pins_prev_clip_metadata() -> None:
+    """Repair responses with zeroed/missing clip metadata still validate by pinning prev.clip."""
+    prev = _make_door_only_scene(door_x=-2.0)
+    bad = prev.model_dump(mode="json", by_alias=True)
+    bad["clip"] = {"id": "", "duration_s": 0.0, "fps": 0.0, "width": 0, "height": 0}
+    validated = _validate_scene_json(json.dumps(bad), prev)
+    assert validated.clip == prev.clip

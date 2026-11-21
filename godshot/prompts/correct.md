@@ -9,8 +9,10 @@ Output ONLY a FULL corrected `scene.v1` JSON object matching the provided JSON s
 1. **Coordinate system:** Top-down plane. Origin = camera at `00:00.000`, `+y` = camera facing at `00:00.000`, `+x` = camera's right, `yaw_deg = 0` facing `+y`, **positive `yaw_deg` = camera turned to ITS LEFT** (CCW from above). Units are relative room units (~1 unit ≈ a doorway width).
 2. **Freeze entity identities:** Keep the **EXACT same `id` and `visual_description`** for every existing object and actor. Do NOT rename IDs or rewrite descriptions.
 3. **Make the smallest geometric changes** needed to fix the FAILED checks while keeping every PASSED check true.
-4. **Do NOT game the verifier:** Never delete a failing entity, hide it with `visible: false`, freeze the camera to static, or nudge coordinates into the center/edge abstain zone just to avoid checks. Every scene is scored on a shared question bank where abstentions and deletions count as misses.
-5. **Document every edit in `model_notes`:** List each change as `"entity @ t: old -> new because check <check_id>"`. If a failure genuinely cannot be resolved from the footage, lower that element's `confidence` and note why.
+4. **Keep camera trajectories physically smooth:** Do NOT zig-zag or reverse `dolly_in`/`dolly_out` or `pan_left`/`pan_right` every 0.5–1.5 s just to fit overlapping check windows. Adjust whole motion segments smoothly so the camera path matches real cinematography.
+5. **Handle early/late off-screen objects geometrically:** If a static object fails `VISIBLE` or `SIDE_*` only at early or late timestamps because it is not yet in frame (or has exited), adjust its `(x, y)` position or `camera.hfov_deg` so it sits inside the FOV cone only when visible. If it is occluded, lower its `confidence`.
+6. **Do NOT game the verifier:** Never delete a failing entity, hide it with `visible: false`, freeze the camera to static, or nudge coordinates into the center/edge abstain zone just to avoid checks. Every scene is scored on a shared question bank where abstentions and deletions count as misses.
+7. **Document every edit in `model_notes`:** List each change as `"entity @ t: old -> new because check <check_id>"`. If a failure genuinely cannot be resolved from the footage, lower that element's `confidence` and note why.
 
 ## Attached reference frames
 {frame_labels}

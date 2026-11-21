@@ -293,6 +293,23 @@ def _generate_with_retry(client: Any, *, model: str, contents: Any, config: Any)
     raise RuntimeError("unreachable")
 
 
+def _compact_passed_line(c: CheckV1) -> str:
+    t_label = c.mmss if c.t_end is None else f"{c.mmss}–{mmss(c.t_end)}"
+    if c.template == "CLOSER" and len(c.entities) == 2:
+        closer, farther = (
+            (c.entities[0], c.entities[1]) if c.expected == "a_first" else (c.entities[1], c.entities[0])
+        )
+        return (
+            f"- [{c.check_id}] CLOSER @ {t_label}: KEEP {closer} closer than {farther} (ratio > 1.3)"
+        )
+    if c.template == "A_LEFT_OF_B" and len(c.entities) == 2:
+        left_e, right_e = (
+            (c.entities[0], c.entities[1]) if c.expected is True else (c.entities[1], c.entities[0])
+        )
+        return f"- [{c.check_id}] ORDER @ {t_label}: KEEP {left_e} left of {right_e}"
+    return f"- [{c.check_id}] {c.template} @ {t_label} entities={c.entities} expected={c.expected}"
+
+
 def build_correction_prompt(
     scene: SceneV1,
     failed: Sequence[CheckV1],
@@ -316,10 +333,7 @@ def build_correction_prompt(
         )
     failed_table = "\n".join(rows) if failed else "(none)"
 
-    passed_lines = [
-        f"- [{c.check_id}] {c.template} @ {c.mmss}: {c.question.instructions} (expected={c.expected})"
-        for c in passed
-    ]
+    passed_lines = [_compact_passed_line(c) for c in passed]
     passed_list = "\n".join(passed_lines) if passed_lines else "(none)"
     frame_block = "\n".join(f"- {lbl}" for lbl in frame_labels) if frame_labels else "(no frames attached)"
 
@@ -331,6 +345,15 @@ def build_correction_prompt(
     )
 
 
+def _validate_scene_json(raw_text: str, prev: SceneV1) -> SceneV1:
+    """Parse JSON and pin `clip` metadata from `prev` so repair calls cannot zero out duration/fps."""
+    data = json.loads(raw_text)
+    if not isinstance(data, dict):
+        raise ValueError("correction response must be a JSON object")
+    data["clip"] = prev.clip.model_dump(mode="json")
+    return SceneV1.model_validate(data)
+
+
 def correct(
     scene: SceneV1,
     failed: Sequence[CheckV1],
@@ -340,11 +363,17 @@ def correct(
     frames_dir: Path | None = None,
     clip_bytes: bytes | None = None,
     fps: int | None = None,
+    thinking_level: str | None = None,
     return_meta: bool = False,
 ) -> SceneV1 | tuple[SceneV1, dict[str, Any]]:
-    """Call Argon (`MODEL_CORRECT`, thinking_level=HIGH) to repair failed checks. Cached on disk."""
+    """Call Argon (`MODEL_CORRECT`) to repair failed checks. Cached on disk.
+
+    Uses `HIGH` thinking on main correction rounds (>5 failures) for strong 2D geometry reasoning
+    and `MEDIUM` thinking on small cleanup rounds (<=5 failures) to avoid 400s+ tail latency.
+    """
     cfg = load_config(require_key=True)
     use_fps = fps if fps is not None else cfg.FPS
+    use_thinking = thinking_level or ("MEDIUM" if len(failed) <= 5 else "HIGH")
     frame_entries, frame_labels = _collect_failing_frames(failed, frames_dir)
     prompt = build_correction_prompt(scene, failed, passed, frame_labels)
 
@@ -353,7 +382,7 @@ def correct(
         if path.exists():
             frame_blobs.append((label, path.read_bytes()))
 
-    params = {"thinking_level": "HIGH", "fps": use_fps, "schema": "scene.v1"}
+    params = {"thinking_level": use_thinking, "fps": use_fps, "schema": "scene.v1"}
     key_parts: list[bytes | str] = [
         clip_bytes if clip_bytes is not None else (video_uri or scene.clip.id),
         cfg.MODEL_CORRECT,
@@ -382,18 +411,28 @@ def correct(
         gen_cfg = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_json_schema=SceneV1.model_json_schema(),
-            thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
+            thinking_config=types.ThinkingConfig(thinking_level=use_thinking),
         )
         t0 = time.perf_counter()
         resp = _generate_with_retry(client, model=cfg.MODEL_CORRECT, contents=contents, config=gen_cfg)
         latency_s = round(time.perf_counter() - t0, 3)
-        raw_text = resp.text or ""
+        raw_text = (resp.text or "").strip()
         usage = getattr(resp, "usage_metadata", None)
         tokens = int(getattr(usage, "total_token_count", 0) or 0)
 
-        # Validate; one repair retry if Argon returned invalid JSON against SceneV1.
+        # Retry main call once if Argon returned an empty payload instead of repairing "".
+        if not raw_text:
+            log.warning("Argon returned empty correction payload; retrying main call once")
+            t_empty = time.perf_counter()
+            resp = _generate_with_retry(client, model=cfg.MODEL_CORRECT, contents=contents, config=gen_cfg)
+            latency_s = round(latency_s + (time.perf_counter() - t_empty), 3)
+            raw_text = (resp.text or "").strip()
+            usage2 = getattr(resp, "usage_metadata", None)
+            tokens += int(getattr(usage2, "total_token_count", 0) or 0)
+
+        # Validate (pinning prev.clip); one JSON repair retry if Argon returned malformed JSON.
         try:
-            validated = SceneV1.model_validate_json(raw_text)
+            validated = _validate_scene_json(raw_text, scene)
         except Exception as err:
             log.warning("Argon correction validation failed (%s); attempting 1 repair call", err)
             repair_prompt = (
@@ -407,7 +446,7 @@ def correct(
             latency_s = round(latency_s + (time.perf_counter() - t1), 3)
             repair_usage = getattr(repair_resp, "usage_metadata", None)
             tokens += int(getattr(repair_usage, "total_token_count", 0) or 0)
-            validated = SceneV1.model_validate_json(repair_resp.text or "")
+            validated = _validate_scene_json((repair_resp.text or "").strip(), scene)
 
         return {
             "scene": validated.model_dump(mode="json", by_alias=True),
