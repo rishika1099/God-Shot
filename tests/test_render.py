@@ -60,8 +60,47 @@ def test_view_maps_y_up_and_keeps_aspect():
 
 
 def test_bounds_cover_room_and_tracks(scene_mock):
-    # room is [-4, 4] × [0, 9]; the door (0.2 wide on x=-4) and window (0.2 deep on y=9) stick out 0.1
-    assert render.scene_bounds(scene_mock) == pytest.approx((-4.1, 0.0, 4.0, 9.1))
+    # mock room [-4, 4] × [0, 9] is small next to the action → kept, unioned with the padded action box:
+    # camera (0, 0..2) + actor (x -2.5..2.5, y up to 6.5) ± FOCUS_PAD 2.5; the window sticks out to y=9.1
+    assert render.scene_bounds(scene_mock) == pytest.approx((-5.0, -2.5, 5.0, 9.1))
+
+
+def test_bounds_drop_an_oversized_room(scene_mock):
+    huge = scene_mock.model_copy(deep=True)
+    huge.room.outline = [[-30, -30], [30, -30], [30, 30], [-30, 30]]
+    b = render.scene_bounds(huge)
+    assert b == pytest.approx((-5.0, -2.5, 5.0, 9.0))  # action box only: the room would shrink actors to dots
+
+
+def test_short_label():
+    assert render.short_label("actor_ironman") == "ironman"
+    assert render.short_label("obj_station") == "station"
+    assert render.short_label("door_1") == "door_1"
+    assert render.short_label("actor_") == "actor_"
+    assert render.short_label("actor_1") == "actor_1" and render.short_label("obj_1") == "obj_1"
+
+
+def test_label_placer_avoids_overlap():
+    from PIL import Image, ImageDraw
+
+    d = ImageDraw.Draw(Image.new("RGB", (400, 400)))
+    placer = render.LabelPlacer()
+    cands = [(200, 210, "mt"), (200, 180, "mb"), (240, 195, "lm"), (160, 195, "rm")]
+    font = render._font(18)
+    spots = [placer.place(d, "ironman", cands, font) for _ in range(3)]
+    assert len(set(spots)) == 3  # three labels at the same anchor → three different spots
+    b = placer.boxes
+    assert not any(render.LabelPlacer._hit(b[i], b[j]) for i in range(3) for j in range(i + 1, 3))
+
+
+def test_full_camera_path_always_drawn(scene_mock):
+    # at t=0 the trail is empty, but the faint full path must already show where the camera will go
+    view = render.fit_view(render.scene_bounds(scene_mock), SIZE)
+    img = render.render_frame(scene_mock, 0.0, SIZE)
+    x, y = view.px(0, 1.0)  # on the upcoming dolly path (inside the wedge, so compare against no-path)
+    plain = render.render_frame(scene_mock.model_copy(update={"camera": scene_mock.camera.model_copy(
+        update={"track": scene_mock.camera.track[:1]})}), 0.0, SIZE)
+    assert _green(img.getpixel((round(x), round(y)))) > _green(plain.getpixel((round(x), round(y))))
 
 
 def test_motion_label(scene_mock):

@@ -57,23 +57,41 @@ class View:
         return [self.px(p[0], p[1], k) for p in points]
 
 
-def scene_bounds(scene: SceneV1, ghost: SceneV1 | None = None) -> tuple[float, float, float, float]:
-    """Bounds of the room outline, objects, camera + actor tracks (and the ghost's camera path)."""
-    pts: list[Sequence[float]] = list(scene.room.outline)
-    for o in scene.objects:
-        pts += object_points(o)
-    for s in [scene, *([ghost] if ghost else [])]:
-        pts += [(k.x, k.y) for k in s.camera.track]
-    for a in scene.actors:
-        pts += [(k.x, k.y) for k in a.track]
+Box = tuple[float, float, float, float]
+
+
+def _bbox(pts: Sequence[Sequence[float]]) -> Box:
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def fit_view(bounds: tuple[float, float, float, float], size: tuple[int, int]) -> View:
+def _area(b: Box) -> float:
+    return max(b[2] - b[0], 1e-6) * max(b[3] - b[1], 1e-6)
+
+
+def scene_bounds(scene: SceneV1, ghost: SceneV1 | None = None) -> Box:
+    """What to fit on screen: the ACTION (camera + actor tracks, and the ghost's camera path) padded by
+    FOCUS_PAD, plus the room outline and objects only if they are at most ROOM_FIT_MAX_RATIO × that area.
+
+    Models often invent a room far larger than where anything happens; fitting it shrinks actors to dots.
+    """
+    cams = [scene, *([ghost] if ghost else [])]
+    core: list[Sequence[float]] = [(k.x, k.y) for s in cams for k in s.camera.track]
+    core += [(k.x, k.y) for a in scene.actors for k in a.track]
+    c = _bbox(core)
+    p = style.FOCUS_PAD
+    focus = (c[0] - p, c[1] - p, c[2] + p, c[3] + p)
+    context = [*scene.room.outline, *(pt for o in scene.objects for pt in object_points(o))]
+    if not context:
+        return focus
+    full = _bbox([*core, *context, focus[:2], focus[2:]])
+    return full if _area(full) <= style.ROOM_FIT_MAX_RATIO * _area(focus) else focus
+
+
+def fit_view(bounds: Box, size: tuple[int, int]) -> View:
     """Fit bounds + 10% margin into the area between header and footer, keeping the aspect ratio."""
     x0, y0, x1, y1 = bounds
-    w, h = max(x1 - x0, 1.0), max(y1 - y0, 1.0)  # never zoom in further than 1 unit across
+    w, h = max(x1 - x0, style.MIN_FIT_SPAN), max(y1 - y0, style.MIN_FIT_SPAN)
     w, h = w * (1 + 2 * style.FIT_MARGIN), h * (1 + 2 * style.FIT_MARGIN)
     area_w, area_h = size[0], size[1] - style.HEADER_PX - style.FOOTER_PX
     scale = min(area_w / w, area_h / h)
@@ -178,6 +196,50 @@ def object_outline(o: Obj) -> list[XY]:
     return rounded_rect(o.center[0], o.center[1], o.size[0], o.size[1], style.OBJ_CORNER, o.rotation_deg)
 
 
+def short_label(entity_id: str) -> str:
+    """'actor_ironman' → 'ironman': map labels drop the type prefix, unless only a number would remain
+    ('actor_1' and 'obj_1' must stay distinguishable)."""
+    for p in style.LABEL_PREFIXES:
+        rest = entity_id[len(p):]
+        if entity_id.lower().startswith(p) and rest and not rest.replace("_", "").isdigit():
+            return rest
+    return entity_id
+
+
+def camera_path(scene: SceneV1) -> list[XY]:
+    return [(k.x, k.y) for k in sorted(scene.camera.track, key=lambda k: k.t)]
+
+
+class LabelPlacer:
+    """Greedy label placement: try each candidate anchor, take the first that overlaps no earlier label."""
+
+    def __init__(self) -> None:
+        self.boxes: list[tuple[float, float, float, float]] = []
+
+    @staticmethod
+    def _hit(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    def place(
+        self, d: ImageDraw.ImageDraw, text: str, candidates: Sequence[tuple[float, float, str]],
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    ) -> tuple[float, float, str]:
+        boxes = [d.textbbox((x, y), text, font=font, anchor=anc) for x, y, anc in candidates]
+        for cand, box in zip(candidates, boxes, strict=True):
+            if not any(self._hit(box, b) for b in self.boxes):
+                self.boxes.append(box)
+                return cand
+        self.boxes.append(boxes[0])  # everything collides: fall back to the first spot
+        return candidates[0]
+
+    def draw(
+        self, d: ImageDraw.ImageDraw, text: str, candidates: Sequence[tuple[float, float, str]],
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont, fill: RGBA,
+    ) -> None:
+        x, y, anchor = self.place(d, text, candidates, font)
+        d.text((x, y), text, fill=fill, font=font, anchor=anchor)
+
+
 def _trail(points: Sequence[XY], draw: ImageDraw.ImageDraw, color: str, width: int) -> None:
     """Polyline fading from transparent (oldest) to TRAIL_ALPHA (newest)."""
     n = len(points)
@@ -223,36 +285,56 @@ def render_static(
         ghost_fill = _rgba(style.GHOST, style.GHOST_ALPHA)
         d.line(gpts, fill=ghost_fill, width=style.TRAIL_WIDTH_PX * k, joint="curve")
 
+    # the camera's whole path, always visible (faint), with a ring at the start position
+    path = camera_path(scene)
+    if len(path) >= 2:
+        cpts = view.pts(path, k)
+        d.line(cpts, fill=_rgba(style.CAMERA, style.CAM_PATH_ALPHA), width=style.TRAIL_WIDTH_PX * k // 2 + k,
+               joint="curve")
+        r0 = 7 * k
+        d.ellipse([cpts[0][0] - r0, cpts[0][1] - r0, cpts[0][0] + r0, cpts[0][1] + r0],
+                  outline=_rgba(style.CAMERA, 160), width=2 * k)
+
     font = _font(style.SMALL_FONT_PX * k)
+    placer = LabelPlacer()
     for o in scene.objects:
         poly = view.pts(object_outline(o), k)
         d.polygon(poly, fill=_rgba(obj_color(o), style.OBJ_ALPHA))
         lx = view.px(o.center[0], o.center[1], k)[0]
-        bottom = max(p[1] for p in poly)
-        d.text((lx, bottom + 4 * k), o.id, fill=_rgba(style.TEXT_DIM), font=font, anchor="mt")
+        ys = [p[1] for p in poly]
+        xs = [p[0] for p in poly]
+        my = (min(ys) + max(ys)) / 2
+        candidates = [(lx, max(ys) + 4 * k, "mt"), (lx, min(ys) - 4 * k, "mb"),
+                      (max(xs) + 6 * k, my, "lm"), (min(xs) - 6 * k, my, "rm")]
+        placer.draw(d, short_label(o.id), candidates, font, _rgba(style.TEXT_DIM))
 
     return img.resize(size, Image.Resampling.LANCZOS)
 
 
-def _draw_actor(d: ImageDraw.ImageDraw, view: View, a: Actor, t: float, low: bool) -> None:
+def _draw_actor(
+    d: ImageDraw.ImageDraw, view: View, a: Actor, t: float, low: bool, placer: LabelPlacer
+) -> None:
     trail = [p for p in (interp_actor(a, s) for s in _sample_times(t, style.ACTOR_TRAIL_S)) if p[3]]
     _trail(view.pts(trail), d, a.color, style.TRAIL_WIDTH_PX)
     x, y, facing, visible = interp_actor(a, t)
     if not visible:
         return
-    sw, sd = style.ACTOR_SHOULDER
+    # never smaller than ACTOR_MIN_SHOULDER_PX on screen, however far the view is zoomed out
+    grow = max(1.0, style.ACTOR_MIN_SHOULDER_PX / (style.ACTOR_SHOULDER[0] * view.scale))
+    sw, sd = style.ACTOR_SHOULDER[0] * grow, style.ACTOR_SHOULDER[1] * grow
     body = view.pts(ellipse(x, y, sw, sd, facing))
     d.polygon(body, fill=_rgba(a.color, 230))
     hx, hy = view.px(x, y)
-    hr = style.ACTOR_HEAD_R * view.scale
+    hr = style.ACTOR_HEAD_R * grow * view.scale
     d.ellipse([hx - hr, hy - hr, hx + hr, hy + hr], fill=_rgba(a.color), outline=_rgba(style.BG), width=2)
     fx, fy = heading(facing)
-    nose = view.px(x + fx * (sd / 2 + 0.12), y + fy * (sd / 2 + 0.12))
+    nose = view.px(x + fx * (sd / 2 + 0.12 * grow), y + fy * (sd / 2 + 0.12 * grow))
     d.line([(hx, hy), nose], fill=_rgba(style.TEXT), width=3)
-    label_y = hy + hr + sd * view.scale / 2 + 4
-    d.text((hx, label_y), a.id, fill=_rgba(style.TEXT), font=_font(style.SMALL_FONT_PX), anchor="mt")
+    off = hr + sd * view.scale / 2 + 4
+    candidates = [(hx, hy + off, "mt"), (hx, hy - off, "mb"), (hx + off, hy, "lm"), (hx - off, hy, "rm")]
+    placer.draw(d, short_label(a.id), candidates, _font(style.SMALL_FONT_PX), _rgba(style.TEXT))
     if low:
-        _dashed(d, view.pts(ellipse(x, y, sw * 1.5, sw * 1.5, 0)), _rgba(style.LOWCONF), 2)
+        _dashed(d, view.pts(ellipse(x, y, sw * 1.5, sw * 1.5, 0)), _rgba(style.LOWCONF), 3)
         _badge(d, view.px(x + sw * 0.75, y + sw * 0.75))
 
 
@@ -263,7 +345,10 @@ def _draw_camera(d: ImageDraw.ImageDraw, view: View, scene: SceneV1, t: float, l
     alpha = int(style.FOV_ALPHA * (style.FOV_LOWCONF_FACTOR if low else 1.0))
     wedge = view.pts(fov_wedge(x, y, yaw, scene.camera.hfov_deg, style.FOV_LENGTH))
     d.polygon(wedge, fill=_rgba(style.CAMERA, alpha))
-    d.line([*wedge[1:2], wedge[0], wedge[-1]], fill=_rgba(style.CAMERA, min(255, alpha * 2)), width=2)
+    if low:  # dimmed fill alone is easy to miss on the dark map → dashed amber outline too
+        _dashed(d, wedge, _rgba(style.LOWCONF), 3, dash=14)
+    else:
+        d.line([*wedge[1:2], wedge[0], wedge[-1]], fill=_rgba(style.CAMERA, min(255, alpha * 2)), width=2)
     body = view.pts(rounded_rect(x, y, style.CAM_SIZE, style.CAM_SIZE, style.CAM_SIZE * 0.25, yaw))
     d.polygon(body, fill=_rgba(style.CAMERA), outline=_rgba(style.BG))
     fx, fy = heading(yaw)
@@ -273,7 +358,7 @@ def _draw_camera(d: ImageDraw.ImageDraw, view: View, scene: SceneV1, t: float, l
         _badge(d, view.px(x + style.CAM_SIZE, y + style.CAM_SIZE))
 
 
-def _badge(d: ImageDraw.ImageDraw, at: XY, r: float = 13) -> None:
+def _badge(d: ImageDraw.ImageDraw, at: XY, r: float = style.BADGE_R_PX) -> None:
     d.ellipse([at[0] - r, at[1] - r, at[0] + r, at[1] + r], fill=_rgba(style.LOWCONF))
     d.text(at, "?", fill=_rgba(style.BG), font=_font(int(r * 1.6)), anchor="mm")
 
@@ -289,8 +374,9 @@ def render_overlay(scene: SceneV1, view: View, size: tuple[int, int], t: float) 
             poly = view.pts(object_outline(o))
             _dashed(d, poly, _rgba(style.LOWCONF), 3)
             _badge(d, (max(p[0] for p in poly), min(p[1] for p in poly)))
+    placer = LabelPlacer()
     for a in scene.actors:
-        _draw_actor(d, view, a, t, a.id in low)
+        _draw_actor(d, view, a, t, a.id in low, placer)
     _draw_camera(d, view, scene, t, CAMERA_ID in low)
 
     # header: motion label (left), timestamp (right)

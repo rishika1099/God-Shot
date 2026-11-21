@@ -39,6 +39,9 @@ OBJ_FALLBACK = "#78909c"
 # --------------------------------------------------------------------------- geometry (room units)
 GRID_STEP = 0.5
 FIT_MARGIN = 0.10  # 10% around room + tracks
+FOCUS_PAD = 2.5  # action box = camera + actor tracks, padded by this (room units) on every side
+ROOM_FIT_MAX_RATIO = 2.0  # include room/objects in the fit only if ≤ this × the padded action area
+MIN_FIT_SPAN = 3.0  # never zoom in further than this many units across
 FOV_LENGTH = 4.0
 CAM_SIZE = 0.35  # side of the camera's rounded square
 ACTOR_SHOULDER = (0.55, 0.28)  # ellipse width (across) × depth (front-back)
@@ -52,7 +55,8 @@ TRAIL_SAMPLES = 16
 
 # --------------------------------------------------------------------------- opacity (0–255)
 FOV_ALPHA = 80
-FOV_LOWCONF_FACTOR = 0.4  # low-confidence camera → wedge at 40% opacity
+FOV_LOWCONF_FACTOR = 0.4  # low-confidence camera → wedge at 40% opacity (+ dashed amber outline)
+CAM_PATH_ALPHA = 70  # the camera's whole path, always visible (faint)
 TRAIL_ALPHA = 200
 GHOST_ALPHA = 110
 OBJ_ALPHA = 235
@@ -66,3 +70,6 @@ SMALL_FONT_PX = 18
 ROOM_WIDTH_PX = 3
 TRAIL_WIDTH_PX = 4
 SUPERSAMPLE = 2  # static layer is drawn at 2× and downscaled (antialiasing)
+ACTOR_MIN_SHOULDER_PX = 30  # actors never shrink below this on screen (zoomed-out scenes)
+BADGE_R_PX = 16
+LABEL_PREFIXES = ("actor_", "obj_", "object_")  # stripped from ids for on-map labels
