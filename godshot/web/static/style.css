@@ -236,17 +236,18 @@ body {
   50% { opacity: 0.35; transform: scale(0.75); }
 }
 
-/* ------------------------------------------------------------------ Workspace Grid */
+/* ------------------------------------------------------------------ Workspace Grid (50/50 Video Left · Editable Board Right) */
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: 16px;
   padding: 14px 18px 24px;
-  max-width: 1680px;
+  max-width: 1720px;
   margin: 0 auto;
+  align-items: start;
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 1020px) {
   main {
     grid-template-columns: 1fr;
     padding: 12px;
@@ -258,6 +259,17 @@ main {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+}
+
+.right {
+  position: sticky;
+  top: 64px;
+}
+
+@media (max-width: 1020px) {
+  .right {
+    position: static;
+  }
 }
 
 /* ------------------------------------------------------------------ Panels & Cards */
@@ -515,10 +527,76 @@ main {
 
 #map {
   width: 100%;
-  height: 490px;
+  height: 440px;
   display: block;
   cursor: crosshair;
   touch-action: none;
+}
+
+.orbit-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 640px) {
+  .orbit-bar {
+    grid-template-columns: 1fr;
+  }
+}
+
+.slider-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.slider-chip label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.slider-chip label span {
+  color: var(--cam);
+  font-weight: 700;
+}
+
+.key-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lowconf-drawer {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.lowconf-drawer summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.lowconf-drawer summary:hover {
+  color: var(--text);
+}
+
+.lowconf-drawer .lowconf {
+  margin-top: 8px;
 }
 
 .mode-banner {
