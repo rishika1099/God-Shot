@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from godshot import ingest, ingest_standin
+from godshot import ingest
 from godshot.cache import cached
 from godshot.config import load_config
 from godshot.schema import MAX_ACTORS, MAX_OBJECTS, Clip, SceneV1, mmss
@@ -56,21 +56,15 @@ class CallStats:
                 self.tokens[k] = self.tokens.get(k, 0) + v
 
 
-# --------------------------------------------------------------------------- S01 (with stand-in)
+# --------------------------------------------------------------------------- S01
 
 
 def _probe(clip: Path) -> Clip:
-    try:
-        return ingest.probe(clip)
-    except NotImplementedError:
-        return ingest_standin.probe(clip)
+    return ingest.probe(clip)
 
 
 def _upload(clip: Path) -> str:
-    try:
-        return ingest.upload(clip)
-    except NotImplementedError:
-        return ingest_standin.upload(clip)
+    return ingest.upload(clip)
 
 
 # --------------------------------------------------------------------------- API calls (cached)

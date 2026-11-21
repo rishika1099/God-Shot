@@ -53,7 +53,7 @@ Give each element a confidence in [0,1]; lower it when guessing (occlusion, dark
 
 ## Notes / changelog
 - 2026-11-21 (Akash): built `extract.py`, `prompts/extract.md` (spec starting text, untuned), CLI `baseline`, `tests/test_extract.py` (20 offline tests, fixture `tests/fixtures/extract_response.json`).
-- **S01 stand-in:** S01 isn't merged yet, so `godshot/ingest_standin.py` (new, temporary) provides `probe` (ffprobe, or dummy 10 s/24 fps/1280×720 metadata when ffprobe is missing) and `upload` (Files API + poll). `extract._probe/_upload` call `godshot.ingest` first and fall back to the stand-in only on `NotImplementedError`, so the real S01 takes over automatically when it lands. Delete the stand-in after S01 merges.
+- S01 is merged; `extract._probe/_upload` call `godshot.ingest` directly (a temporary stand-in was used before S01 landed and has been removed). `ingest.upload` has its own 40 h URI cache, and `ingest.probe` rejects clips > 35 s.
 - Cache key = `[clip_bytes, MODEL_EXTRACT, prompt, {fps, thinking_level, schema}]`; the upload happens inside the miss path, so a cache hit makes zero network calls. The repair call is cached separately (`kind=extract_repair`).
 - Cached payload = `{text, usage, latency_s}`; on a hit, the logged latency is the original call's latency and `cached_calls` counts the hit.
 - `clip` metadata always comes from probe, not from the model.
