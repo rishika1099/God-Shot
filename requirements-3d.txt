@@ -1,0 +1,7 @@
+# Optional: enables the hybrid 3D re-shoot guide (godshot/reproject.py).
+# Without these packages, re-shoots use the map-exact blockout guide.
+-r requirements.txt
+torch>=2.15
+transformers>=5.24
+mediapipe>=1.2.3
+opencv-python>=5.1
