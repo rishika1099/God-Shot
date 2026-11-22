@@ -315,7 +315,6 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
             d / "reshoot_takes",
             n=2,
             workers=2,
-            resolution="720p",
             mode="reproject" if use_reproj else "blockout",
             verify_actions=True,
             action_retries=1,

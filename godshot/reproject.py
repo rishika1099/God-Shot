@@ -998,7 +998,7 @@ angle into a photorealistic shot that preserves 100% of the TOP row's physical a
    never starting backwards and spinning around) and how they deform/move on impact.
 3. Describe the exact peak physical action & timing visible across the sequence (e.g. arm wind-up,
    violent downward fist punch smashing the laptop flat, recoil, hand on forehead).
-Keep it under 550 characters, concrete, and strictly photorealistic.
+Keep it under 320 characters, concrete, and strictly photorealistic.
 """
 
 
@@ -1072,7 +1072,7 @@ def analyze_novel_view(
         (work_dir / "novel_view.json").write_text(
             json.dumps({"analysis": text, "sheet": str(sheet_path)}, indent=2) + "\n", encoding="utf-8"
         )
-        return text[:700]
+        return text[:380]
     except Exception as e:
         log.warning("novel-view analysis unavailable (%s: %s)", type(e).__name__, e)
         return ""
@@ -1160,5 +1160,7 @@ def best_actor_face_crop(clip: Path, out_path: Path, n_samples: int = 36) -> Pat
         return None
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(best_crop).save(out_path, quality=94)
+    im = Image.fromarray(best_crop)
+    im.thumbnail((768, 768), Image.Resampling.LANCZOS)
+    im.save(out_path, quality=92)
     return out_path

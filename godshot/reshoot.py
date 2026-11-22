@@ -677,11 +677,9 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous, fluid 24fps Steadicam shot, no cuts, no jump cuts or slideshow transitions. Keep the "
-    "room, each person's identity, hair, and clothing strictly separate and consistent with the reference "
-    "images (NEVER transfer props, gauntlets, hair, or sleeves between people), while strictly following "
-    "EVERY camera movement, angle, behind-the-back viewpoint, and actor position or turn in the blockout "
-    "video."
+    "One continuous, fluid 24fps Steadicam shot, no cuts or slideshow transitions. Keep each person's "
+    "identity, hair, and outfit strictly separate (never transfer props, gauntlets, or clothing between "
+    "people), following every camera angle, move, and pose in the input video."
 )
 
 
@@ -760,27 +758,17 @@ def _camera_angle_shift_notes(
         return [], False
     vis_ids = _visible_object_ids(scene, dur)
     hidden = [o.visual_description for o in scene.objects if o.id not in vis_ids]
-    shown = [o.visual_description for o in scene.objects if o.id in vis_ids]
-    kind = "180° REVERSE CAMERA ANGLE" if med_diff >= 135.0 else f"NEW {med_diff:.0f}° CAMERA ANGLE"
+    kind = "180° REVERSE ANGLE" if med_diff >= 135.0 else f"NEW {med_diff:.0f}° ANGLE"
     msg = (
-        f"{kind}: The camera has physically moved to a DIFFERENT side of the set (~{med_diff:.0f}° "
-        "from the original shot) and is looking in a NEW direction. Rotate the ENTIRE room and "
-        "background to match the new camera viewpoint — NEVER keep the original camera's background "
-        "and merely reposition the person in front of it!"
+        f"{kind}: Camera moved ~{med_diff:.0f}° to a new side of the room. Rotate the ENTIRE room "
+        "background — never reuse the original background or just reposition the person."
     )
     if hidden:
-        msg += (
-            f" These items from the original background are now BEHIND THE CAMERA and MUST NOT appear "
-            f"in this shot: {'; '.join(hidden)}."
-        )
-    if shown:
-        msg += f" Only show the visible set pieces from the blockout: {'; '.join(shown)}."
+        msg += f" BEHIND CAMERA (DO NOT DRAW): {'; '.join(hidden)}."
     if med_diff >= 110.0:
         msg += (
-            " FROM THE VERY FIRST FRAME (00:00.0) ONWARD, every prop/laptop is ALREADY oriented toward "
-            "the person (only the matte black outer back lid of an open laptop faces the camera from "
-            "00:00.0 — NEVER start frame 0 with a glowing screen facing the camera and NEVER have the "
-            "person pick up, spin, or flip the laptop around!)."
+            " FROM FRAME 0 (00:00.0), props already face the person (only the dark outer back lid of an "
+            "open laptop faces the camera — NEVER start with the green screen facing camera or flip it!)."
         )
     return [msg], True
 
@@ -824,17 +812,11 @@ def _viewpoint_notes(
             span = f"{ts(t0)}–{ts(t1)}" if t1 > t0 else f"around {ts(t0)}"
             if side == "back":
                 has_back = True
-                notes.append(
-                    f"{span}: the camera is behind {a.visual_description}, viewing the back of their "
-                    "head and shoulders (matching the dark hair back of the head in the blockout)"
-                )
+                notes.append(f"{span}: camera behind {a.visual_description} (show back of head/shoulders)")
             elif side == "front" and cam_shifted:
-                notes.append(
-                    f"{span}: {a.visual_description} is facing TOWARD the camera — show their face and "
-                    "front of their body across the scene (matching the dark visor face in the blockout)"
-                )
+                notes.append(f"{span}: {a.visual_description} faces camera (show face/front)")
             elif side == "side" and t1 - t0 >= dur * 0.25:
-                notes.append(f"{span}: {a.visual_description} is viewed in side profile")
+                notes.append(f"{span}: {a.visual_description} in side profile")
     return notes, has_back
 
 
@@ -903,15 +885,11 @@ def describe_shot(
     if shift_notes:
         lines += shift_notes
     if vp_notes or face_notes:
-        lines.append("Camera viewpoint and actor facing (follow the blockout angle strictly):")
+        lines.append("Actor facing:")
         lines += vp_notes + face_notes
     if beats:
         if has_back or angle_shifted:
-            lines.append(
-                "Performance actions (perform these EXACT physical actions and timing, viewed from the NEW "
-                "camera angle in the blockout; ignore any original-camera left/right/foreground wording in "
-                "the beats):"
-            )
+            lines.append("Performance (enact these EXACT physical actions & timing from the new angle):")
         else:
             lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
         lines += _beat_lines(beats, time_scale)
@@ -919,16 +897,12 @@ def describe_shot(
     if scene_edited.actors:
         n_act = len(scene_edited.actors)
         rules += (
-            f" STRICT CAST COUNT: There are EXACTLY {n_act} {'person' if n_act == 1 else 'people'} in the "
-            "entire scene. ONLY draw a person where a colored human figure box appears in the blockout. "
-            "The grey walls/background of the blockout contain ZERO people — NEVER paste extra people, "
-            "bystanders, or duplicate copies of actors from the reference image into the background."
+            f" STRICT CAST COUNT: EXACTLY {n_act} {'person' if n_act == 1 else 'people'} total — ONLY "
+            "draw a person where a colored figure appears; NEVER clone or paste extra people into the "
+            "background."
         )
     if has_back:
-        rules += (
-            " When the camera moves behind a person, show the back of THAT SAME person's head and clothing "
-            "instead of their front — never keep a duplicate front copy in the background."
-        )
+        rules += " Behind a person, show ONLY the back of their head/clothing, never a duplicate front."
     lines.append(rules)
     text = "\n".join(lines)
     return _polish(text) if polish else text
@@ -990,10 +964,8 @@ def edit_prompt(
         keep, only = "What the people do is described in the PERFORMANCE section below.", ""
     elif beats and (has_back or angle_shifted):
         keep = (
-            "The people MUST still perform all the exact physical actions and timing in the performance "
-            "beats below (gestures, strikes, object interactions, movement), viewed from the NEW camera "
-            "angle in the blockout — rotate the entire room/background to match the new camera angle "
-            "instead of reusing the original camera background."
+            "Enact ALL physical performance beats below at exact timing from the NEW camera angle; "
+            "rotate the room background to match."
         )
     elif beats:
         keep = (
@@ -1009,14 +981,10 @@ def edit_prompt(
     if reproject_mode:
         nv = f"\nNOVEL-VIEW ANALYSIS: {novel_view_brief.strip()}" if novel_view_brief.strip() else ""
         header = (
-            "Re-render and photorealistically refine this 3D-reprojected novel-view video into clean, crisp "
-            "footage matching the reference images. The input video is a true 3D RGB-D point-cloud "
-            "projection of the real room plus either projected real pixels or a real 3D pose-tracked "
-            "figure performing the EXACT real body, arm, fist, and head motion from the original clip. "
-            "Follow EVERY camera angle, arm swing, fist strike, recoil, and timing frame-for-frame; "
-            f"seamlessly inpaint any point-cloud gaps as real room surfaces. "
-            f"Entity colors (where synthetic boxes/figures appear): {'; '.join(legend)}. "
-            f"{keep} {only}".rstrip()
+            "Re-render this 3D-reprojected novel-view video into photorealistic footage matching the "
+            "reference images. Follow EVERY camera angle, body pose, arm swing, fist strike, hinged prop "
+            "motion, and timing frame-for-frame; inpaint any gaps as real room surfaces. "
+            f"Previs legend: {'; '.join(legend)}. {keep} {only}".rstrip()
             + nv
         )
     else:
@@ -1518,8 +1486,10 @@ def reshoot_best(
                 from godshot import direct as direct_mod  # S14
 
                 take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
+            retry_extra = {**extra, "novel_view_brief": ""}
+            retry_kw = {**kwargs, "resolution": "360p"}
             return reshoot(
-                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
+                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **retry_extra, **retry_kw
             )
 
     def score(k: int, path: Path) -> dict[str, Any]:
