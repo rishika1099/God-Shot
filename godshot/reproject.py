@@ -1076,3 +1076,89 @@ def analyze_novel_view(
     except Exception as e:
         log.warning("novel-view analysis unavailable (%s: %s)", type(e).__name__, e)
         return ""
+
+
+# --------------------------------------------------------------------------- sharpest front-face actor crop
+
+
+def best_actor_face_crop(clip: Path, out_path: Path, n_samples: int = 36) -> Path | None:
+    """Scan `clip` with MediaPipe Pose + Laplacian sharpness to extract the sharpest, most front-facing,
+    unoccluded, full-head-and-torso crop of a single actor at full native video resolution."""
+    import cv2
+
+    clip = Path(clip)
+    cap = cv2.VideoCapture(str(clip))
+    if not cap.isOpened():
+        return None
+    n_src = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if n_src <= 0:
+        cap.release()
+        return None
+    idxs = sorted(
+        {min(n_src - 1, max(0, round(f * (n_src - 1)))) for f in np.linspace(0.03, 0.95, n_samples)}
+    )
+    wanted = set(idxs)
+    full_frames: list[np.ndarray] = []
+    small_frames: list[np.ndarray] = []
+    i = 0
+    max_i = idxs[-1]
+    while i <= max_i:
+        ok, bgr = cap.read()
+        if not ok:
+            break
+        if i in wanted:
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            full_frames.append(rgb)
+            small_frames.append(cv2.resize(rgb, (640, 360), interpolation=cv2.INTER_AREA))
+        i += 1
+    cap.release()
+    if not small_frames:
+        return None
+
+    poses = _extract_poses_mediapipe(small_frames, fps=max(1.0, fps * len(small_frames) / max(n_src, 1)))
+    best_score = -1.0
+    best_crop: np.ndarray | None = None
+    for full_rgb, pose in zip(full_frames, poses, strict=True):
+        if pose is None:
+            continue
+        il, vis = pose["img"], pose["vis"]
+        if vis[_NOSE] < 0.5 or vis[_L_SH] < 0.4 or vis[_R_SH] < 0.4:
+            continue
+        nx, ny = float(il[_NOSE, 0]), float(il[_NOSE, 1])
+        # Head must not be chopped off at frame edges
+        if not (0.10 < nx < 0.90 and 0.10 < ny < 0.85):
+            continue
+        # Frontality: nose centered between ears & both eyes/ears visible, hands NOT covering face!
+        ear_span = abs(float(il[_R_EAR, 0] - il[_L_EAR, 0]))
+        ear_mid = 0.5 * float(il[_R_EAR, 0] + il[_L_EAR, 0])
+        sym = max(0.0, 1.0 - abs(nx - ear_mid) / max(ear_span * 0.5, 0.03)) if ear_span > 0.02 else 0.3
+        hand_d = min(
+            math.hypot(float(il[idx, 0]) - nx, float(il[idx, 1]) - ny)
+            for idx in (_L_WR, _R_WR, _L_IDX, _R_IDX)
+        )
+        unoccluded = 0.72 + 0.28 * min(hand_d / 0.16, 1.0)
+        sh_span = abs(float(il[_R_SH, 0] - il[_L_SH, 0]))
+        h, w = full_rgb.shape[:2]
+        pad_x = max(0.18, sh_span * 0.85)
+        cx = 0.5 * (float(il[_L_SH, 0]) + float(il[_R_SH, 0]))
+        x0 = max(0, int((min(cx, nx) - pad_x) * w))
+        x1 = min(w, int((max(cx, nx) + pad_x) * w))
+        y0 = max(0, int((ny - 0.20) * h))
+        y1 = min(h, int((max(float(il[_L_SH, 1]), float(il[_R_SH, 1])) + 0.48) * h))
+        if x1 - x0 < 80 or y1 - y0 < 80:
+            continue
+        crop = full_rgb[y0:y1, x0:x1]
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+        sharp = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 150.0, 2.0)
+        score = (0.45 * sym + 0.35 * min(sh_span / 0.28, 1.0) + 0.20 * sharp) * unoccluded
+        if score > best_score:
+            best_score = score
+            best_crop = crop
+
+    if best_crop is None:
+        return None
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(best_crop).save(out_path, quality=94)
+    return out_path

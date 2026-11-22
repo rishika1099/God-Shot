@@ -1177,6 +1177,18 @@ def reference_images(
     for e in entities_for_crops:
         if len(refs) >= max_refs:
             break
+        if e.id in actor_ids and len(scene_orig.actors) == 1:
+            # Prefer sharpest front-facing native-res face/jersey portrait via MediaPipe when available
+            try:
+                from godshot import reproject
+
+                if reproject.available():
+                    smart = reproject.best_actor_face_crop(clip, out_dir / f"crop_{e.id}.jpg")
+                    if smart is not None:
+                        refs.append(smart)
+                        continue
+            except Exception:
+                pass
         if vis_obj_ids is not None and e.id not in actor_ids and e.id not in vis_obj_ids and len(refs) >= 3:
             continue  # don't feed crops of background objects that are behind the edited camera
         if (
