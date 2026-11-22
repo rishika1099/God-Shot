@@ -1109,6 +1109,7 @@ def reference_images(
     out_dir: Path,
     max_refs: int = MAX_REFS,
     scene_edited: SceneV1 | None = None,
+    include_crops: bool = True,
 ) -> list[Path]:
     """≤ 6 refs: keyframes from the ORIGINAL clip + crops around entities (actors first, then objects
     visible in `scene_edited` when provided).
@@ -1142,21 +1143,11 @@ def reference_images(
     entities_for_crops = (
         list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *objs]
     )
+    if not include_crops:
+        return refs[:max_refs]
     for e in entities_for_crops:
         if len(refs) >= max_refs:
             break
-        if e.id in actor_ids and len(scene_orig.actors) == 1:
-            # Prefer sharpest front-facing native-res face/jersey portrait via MediaPipe when available
-            try:
-                from godshot import reproject
-
-                if reproject.available():
-                    smart = reproject.best_actor_face_crop(clip, out_dir / f"crop_{e.id}.jpg")
-                    if smart is not None:
-                        refs.append(smart)
-                        continue
-            except Exception:
-                pass
         if vis_obj_ids is not None and e.id not in actor_ids and e.id not in vis_obj_ids and len(refs) >= 3:
             continue  # don't feed crops of background objects that are behind the edited camera
         if (
@@ -1269,6 +1260,7 @@ def reshoot(
     action_fix: str = "",
     guide_override: Path | None = None,
     novel_view_brief: str = "",
+    minimal_refs: bool = False,
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
@@ -1300,7 +1292,12 @@ def reshoot(
             "re-shoot: %.1f s shot played %.2fx faster to fit Omni's %.0f s", want, time_scale, out_len
         )
     refs = reference_images(
-        Path(clip), scene_orig, work / "refs", max_refs=MAX_REFS, scene_edited=scene_edited
+        Path(clip),
+        scene_orig,
+        work / "refs",
+        max_refs=MAX_REFS,
+        scene_edited=scene_edited,
+        include_crops=not minimal_refs,
     )
     ref_bytes = [r.read_bytes() for r in refs]
     directed = direction is not None
@@ -1486,7 +1483,7 @@ def reshoot_best(
                 from godshot import direct as direct_mod  # S14
 
                 take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
-            retry_extra = {**extra, "novel_view_brief": ""}
+            retry_extra = {**extra, "novel_view_brief": "", "minimal_refs": True}
             retry_kw = {**kwargs, "resolution": "360p"}
             return reshoot(
                 clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **retry_extra, **retry_kw
