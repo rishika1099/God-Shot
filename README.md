@@ -1,80 +1,362 @@
 # God-Shot
 
-**Turn one continuous film shot into a verified overhead blocking map, then edit the map and re-shoot it.**
+**Turn one continuous film shot into a verified overhead blocking map, edit the map, and re-shoot the scene from a new angle.**
 
-Built at the Gemini 4 NYC Hackathon (Cerebral Valley × Google DeepMind), Nov 21, 2026. Track: **Element 119**.
+Built at the Gemini 4 NYC Hackathon (Cerebral Valley x Google DeepMind), Nov 21, 2026. Track: **Element 119**.
 
 ## What it does
 
-1. **Upload a single shot** (5–15 s, no cuts).
-2. **Gemini 4 Argon** watches it and writes a scene map: room, furniture, actors and camera path (`scene.json`).
-3. **Our code** turns that map into dozens of geometric yes/no predictions ("the door should be in the left half at 0:03").
-4. **Gemini Decision 1** (Decisions API) checks every prediction against the real frames and returns calibrated probabilities.
-5. **Argon corrects** whatever failed. A correction is kept only if it improves the pass rate. Up to 3 rounds.
-6. **We render a 9:16 reel**: the clip on top and the animated top-down map below. Parts it still doesn't trust get "?" badges.
-7. **Edit the map** (move the camera, change the move, move an actor) → re-render instantly, or **re-shoot** with Gemini Omni and verify whether the generated video followed your edit.
+1. **Upload one continuous shot.** God-Shot is designed for 5 to 15 second clips with no cuts.
+2. **Map the scene.** Gemini 4 Argon watches the video and writes a structured overhead map of the room, objects, actors, and camera path.
+3. **Test the map.** Our geometry code turns the map into yes/no predictions, such as "the door is in the left half of the frame at 0:03."
+4. **Verify against real frames.** Gemini Decision 1 returns a probability for each prediction.
+5. **Correct what failed.** Argon repairs the map for up to 3 rounds. A correction is kept only if it scores better on a shared question bank.
+6. **Show the result.** The app renders an animated map and a 9:16 reel. Elements it still does not trust are visibly marked as low confidence.
+7. **Direct a new shot.** Drag the camera, draw a path, orbit an actor, choose a POV, or type an instruction.
+8. **Re-shoot and check it.** Gemini Omni generates labeled AI takes, and God-Shot scores them against the edited map and the original action.
 
-## Core claim (what we measure)
+## System overview
 
-> A single Argon call gets camera motion and layout wrong X% of the time. Our verify-and-fix loop lowers that to Y% on held-out clips scored by humans, and the elements it flags low-confidence really are wrong more often.
+```mermaid
+flowchart TD
+    subgraph understand["Step 1: Map the shot"]
+        direction LR
+        clip["Original shot"] --> ingest["Ingest<br/>Files API + ffmpeg"]
+        ingest --> extract["Scene map<br/>Gemini 4 Argon"]
+    end
 
-Numbers are filled in only from our own held-out runs (see `eval/results.md`).
+    subgraph loop["Step 2: Verify and correct"]
+        direction LR
+        checks["Geometric checks<br/>Python"] --> verify["Verify on frames<br/>Decision 1"]
+        verify --> correct["Repair map<br/>Gemini 4 Argon"]
+        correct --> gate{"Better?"}
+        gate -- "yes" --> checks
+    end
 
-## Architecture
+    subgraph review["Step 3: Review and edit"]
+        direction LR
+        output["Map + 9:16 reel<br/>Pillow + ffmpeg"] --> editor["Web map editor<br/>FastAPI + HTML/JS"]
+        editor --> rerender["Instant re-render"]
+    end
 
+    subgraph shoot["Step 4: Re-shoot and verify"]
+        direction LR
+        reshoot["Generate takes<br/>Gemini Omni"] --> score["Score takes<br/>Decision 1 + Hydrogen"]
+        score --> best["Best labeled take"]
+    end
+
+    understand --> loop --> review --> shoot
 ```
-clip ─► ingest (Files API + ffmpeg frames)
-     ─► extract (gemini-4-argon)            → scene.json   (round 0 = BASELINE)
-     ─► checks  (our geometry code)          → check.v1 list
-     ─► verify  (gemini-decision-1)          → p(yes) per check
-     ─► correct (gemini-4-argon, ≤3 rounds, keep-if-better)
-     ─► render  (matplotlib/Pillow + ffmpeg) → reel.mp4 (clip over map)
-edit map ─► re-render  |  re-shoot (gemini-omni-1.2-flash) ─► verify vs EDITED map
+
+### Which model does what
+
+| Model | Job |
+|---|---|
+| **Gemini 4 Argon** | Watches the video, writes the scene map, repairs failed elements, analyzes the scene, directs performances, critiques takes |
+| **Gemini 4 Hydrogen** | Turns text into map edits, interprets change requests, extracts action beats, analyzes new views, compares action frame by frame |
+| **Gemini Decision 1** | Returns probabilities for map checks, re-shoot conformance, preservation, and requested changes |
+| **Gemini Omni 1.2 Flash** | Generates the re-shoot from the guide video, reference images, and directed prompt |
+
+Model IDs are configured in one place: [`godshot/config.py`](godshot/config.py).
+
+## The verification loop
+
+The checks are generated by code, not by a language model. They cover visibility, left/right position, relative order, distance, approach, pan, and dolly.
+
+```mermaid
+flowchart TD
+    start["Round 0 scene from Argon"] --> bank["Build the shared question bank<br/>Decision 1 answers each new question"]
+    bank --> failed{"Failed checks and<br/>rounds remaining?"}
+    failed -- "yes" --> repair["Argon proposes a correction<br/>IDs and identity stay frozen"]
+    repair --> compare["Add new checks to the bank<br/>Rescore both scenes on the same bank"]
+    compare --> accept{"Score improved and<br/>at most 1 regression?"}
+    accept -- "yes, adopt it" --> failed
+    accept -- "no, keep current" --> finish
+    failed -- "no" --> finish["Mark remaining failures low confidence<br/>Write scene_final.json + loop_log.json"]
 ```
 
-Details: [`.claude/docs/architecture.md`](.claude/docs/architecture.md)
+An uncertain answer counts as a miss, so a candidate cannot improve its score by making the verifier abstain. The verifier guides the loop, but it is **not** the final accuracy grader. Headline accuracy must come from human labels.
 
-## Setup
+## Map editing
+
+The browser editor changes the same `scene.v1` map that the pipeline verified.
+
+- **Camera:** drag keyframes, set yaw and field of view, draw a path, or use smooth curves.
+- **Shot presets:** static, dolly, truck, pan, and arc.
+- **POV board:** over-the-shoulder, reverse 180, side profile, wide, close-up, and 360 orbit.
+- **Actors:** hold a position across the whole shot or animate it at the current time.
+- **Text edits:** Hydrogen translates an instruction into validated map operations.
+- **Review:** undo/redo, keyframe tracks, and synced Before/After playback.
+
+## The re-shoot pipeline
+
+This diagram shows the web app flow.
+
+```mermaid
+flowchart TD
+    input["Original clip + original map + edited map<br/>Hydrogen extracts the action beats"] --> deps{"Optional 3D<br/>packages installed?"}
+    deps -- "yes" --> hybrid["Hybrid 3D guide: Depth Anything V2 + MediaPipe Pose<br/>Under 65 degrees: reproject real pixels<br/>65 degrees or more: clean 3D room, pose, and props"]
+    deps -- "no" --> blockout["Map-exact 3D blockout guide"]
+    hybrid --> takes["Generate 2 parallel takes with Omni<br/>Guide video + reference images + prompt"]
+    blockout --> takes
+    takes --> rank["Score each take<br/>Map conformance: Decision 1<br/>Action and identity: Hydrogen"]
+    rank --> good{"Best action score<br/>at least 0.82?"}
+    good -- "yes" --> final["Best take + visible AI label"]
+    good -- "no" --> fix["Generate one corrective take"]
+    fix --> rescored["Score it and keep the best take"]
+    rescored --> final
+```
+
+Important details:
+
+- **The web app** generates 2 takes at 360p, runs action verification, and can add one corrective take. Its ranking score is `0.55 x conformance + 0.45 x action`.
+- **The CLI** uses the blockout guide by default. Pass `--mode reproject` to use the 3D guide.
+- **Failed Omni calls** retry once with a compact prompt, fewer reference images, and 360p output.
+- **Long shots** are sped up to fit Omni's 15 second output limit instead of losing the ending.
+- **Audio** from the original clip is carried into the 3D guide video.
+- **Every generated video** receives a visible "AI-generated re-shoot" label.
+
+### Direct agents (CLI option)
+
+`--direct` adds a small agent team that directs performance and requested changes. It does not change the camera path or map positions.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant A as Scene analyst (Argon)
+    participant I as Interpreter (Hydrogen)
+    participant D as Director (Argon)
+    participant O as Omni
+    participant V as Decision 1
+    participant C as Critic (Argon)
+
+    U->>A: Original clip and map
+    A-->>I: Intent, beats, performance, must-preserve items
+    U->>I: Map diff and optional request
+    I-->>D: Typed changes, locked items, success checks
+    D-->>O: Performance direction
+    O-->>V: Generated take
+    V-->>C: Conformance, preservation, fulfilment
+    alt Critic asks for revision
+        C-->>O: Corrections for one more take
+        O-->>V: Revised take
+    else Critic accepts
+        C-->>U: Keep best take
+    end
+```
+
+## Scene contract
+
+Every stage shares versioned Pydantic contracts in [`godshot/schema.py`](godshot/schema.py).
+
+```mermaid
+classDiagram
+    class SceneV1 {
+        clip
+        room
+        objects
+        actors
+        camera
+        low_confidence
+    }
+    class Camera {
+        hfov_deg
+        track
+        motion_segments
+    }
+    class Actor {
+        id
+        visual_description
+        track
+        confidence
+    }
+    class Obj {
+        id
+        type
+        visual_description
+        center
+        size
+        confidence
+    }
+    class CheckV1 {
+        check_id
+        template
+        entities
+        t
+        expected
+        question
+        result
+    }
+    class LabelV1 {
+        clip_id
+        source
+        split
+        labels
+    }
+    SceneV1 *-- Camera
+    SceneV1 *-- "many" Actor
+    SceneV1 *-- "many" Obj
+    SceneV1 ..> CheckV1 : generates
+    LabelV1 ..> SceneV1 : human evaluation
+```
+
+## Quick start
+
+Requires Python 3.11, ffmpeg, and a Gemini API key.
 
 ```bash
-python3.11 -m venv .venv && source .venv/bin/activate
+git clone https://github.com/rishika1099/God-Shot.git
+cd God-Shot
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # paste your GEMINI_API_KEY
-brew install ffmpeg         # or apt install ffmpeg
+cp .env.example .env
 ```
 
-## Run (as specs land)
+Add `GEMINI_API_KEY` to `.env`, then install ffmpeg (`brew install ffmpeg` on macOS or `apt install ffmpeg` on Debian/Ubuntu).
+
+To enable 3D reprojection, install the optional packages:
 
 ```bash
-python -m godshot run clips/demo.mp4 -o out/demo      # full loop + reel
-python -m godshot baseline clips/demo.mp4 -o out/demo # single Argon call
-python -m godshot eval --system full|baseline         # eval/results.md
-python -m godshot web                                 # local UI + cached demo mode
+pip install torch transformers mediapipe opencv-python
 ```
 
-## How we build: spec-driven
+Without them, re-shoots automatically use the map-exact blockout guide.
 
-Every piece of work is a spec in [`.claude/specs/`](.claude/specs/). Each has an owner, inputs/outputs, the models to use, and acceptance criteria. Tell your agent:
+### Run the app
 
-> "Read CLAUDE.md, then implement spec S0X. Only touch the files that spec lists."
+```bash
+python -m godshot web
+```
+
+Open <http://127.0.0.1:8000>, upload a shot, edit the map, and re-shoot it.
+
+Try the UI with mock data and no API calls:
+
+```bash
+python -m godshot web --mock
+```
+
+Serve existing runs in read-only cached mode:
+
+```bash
+GODSHOT_OFFLINE=1 python -m godshot web
+```
+
+### Command line
+
+```bash
+python -m godshot smoke
+```
+
+```bash
+python -m godshot baseline clips/shot.mp4 -o out/shot
+```
+
+Run the full loop from Python:
+
+```bash
+python -c "from godshot.pipeline import run; run('clips/shot.mp4', 'out/shot')"
+```
+
+Re-shoot from a map saved by the editor:
+
+```bash
+python -m godshot reshoot clips/shot.mp4 --orig out/shot/scene_final.json --edited out/shot/scene_edit_1.json -o out/shot/reshoot --n 2 --mode reproject
+```
+
+Add directing agents and a free-text request:
+
+```bash
+python -m godshot reshoot clips/shot.mp4 --orig out/shot/scene_final.json --edited out/shot/scene_edit_1.json -o out/shot/directed --n 2 --direct --critic 1 --request "make the actor limp"
+```
+
+Score any video against a map:
+
+```bash
+python -m godshot conformance path/to/video.mp4 --edited out/shot/scene_edit_1.json
+```
+
+### Output files
+
+| File | Contents |
+|---|---|
+| `scene_r{n}.json` | Scene map for round 0 and each accepted correction |
+| `checks_r{n}.json` | Checks and verifier answers for those rounds |
+| `scene_final.json` | Final accepted map with low-confidence marks |
+| `scene_edit_{n}.json` | Maps saved from the editor |
+| `loop_log.json` | Scores, regressions, changes, tokens, and latency |
+| `map.mp4`, `reel.mp4` | Animated map and 9:16 reel |
+| `reshoot_takes/take_{n}.mp4` | Individual generated takes |
+| `reshoot_best.mp4`, `reshoot_best.json` | Best take and its scores |
+
+## Evaluation
+
+God-Shot's evaluation is designed to compare the one-call Argon baseline with the corrected map on held-out clips, using **human labels only**.
+
+| Item | Current state on `main` |
+|---|---|
+| Dataset manifest | 51 clips: 40 CameraBench, 10 *Tears of Steel*, 1 *Sintel* |
+| Labels | 40 CameraBench clips with mapped expert camera-motion labels |
+| Scoring code | Not merged yet (`siva/s11-score`) |
+| Results and figures | Not published yet |
+
+We do not publish an accuracy claim until the scoring code has run on the frozen test split.
+
+## Project structure
+
+```text
+godshot/
+  __main__.py    CLI
+  config.py      Environment and model IDs
+  schema.py      Shared contracts
+  cache.py       Disk cache for API responses
+  ingest.py      Upload and frame extraction
+  extract.py     Argon scene extraction
+  geometry.py    Projection and scene math
+  checks.py      Geometric check generation
+  verify.py      Decisions API verifier
+  correct.py     Argon correction
+  pipeline.py    Verify-and-correct loop
+  render.py      Animated overhead map
+  compose.py     9:16 reel and comparison video
+  edit.py        Map edits and text instructions
+  reshoot.py     Omni generation and scoring
+  reproject.py   Depth, pose, and novel-view guide
+  direct.py      Analyst, director, and critic agents
+  web/           FastAPI app and browser UI
+eval/            Clips manifest, labels, and evaluation
+tests/           Unit and integration tests
+.claude/specs/   Feature specs and status board
+```
+
+## Development
+
+```bash
+ruff check .
+```
+
+```bash
+pytest
+```
+
+Work is organized as specs in [`.claude/specs/`](.claude/specs/). Use a branch named `<owner>/<spec>-<slug>` and open a PR. `main` changes only through group-approved PRs. See [CLAUDE.md](CLAUDE.md#git-workflow-own-branches-group-approved-prs).
 
 | Owner | Area | Specs |
 |---|---|---|
-| **Prajesh** | Foundation, ingest, Omni re-shoot (incl. spike + UI button) | S00, S01, S12 |
-| **Siva** | Geometry, Decisions verifier, web UI + map editor, scoring | S03, S05, S09, S11 |
-| **Akash** | Gemini extraction (baseline), map renderer, reel | S02, S07, S08 |
-| **Rishika** | Checks, correction loop, eval data + labels, charts, pitch | S04, S06, S10, S13 |
-
-Status board: [`.claude/specs/00-index.md`](.claude/specs/00-index.md)
-
-**Git:** one branch per spec (`<owner>/<spec>-<slug>`, e.g. `siva/s05-verify`), stacked on your own branches when needed. Never push to `main`. One PR per spec; PRs are reviewed and approved together by the group at each sync, then merged. Full rules: [CLAUDE.md → Git workflow](CLAUDE.md#git-workflow-own-branches-group-approved-prs).
+| **Prajesh** | Foundation, ingest, Omni re-shoot | S00, S01, S12 |
+| **Siva** | Geometry, Decisions verifier, web UI, scoring | S03, S05, S09, S11 |
+| **Akash** | Extraction, renderer, reel, Direct agents | S02, S07, S08, S14 |
+| **Rishika** | Checks, correction loop, eval data, charts, pitch | S04, S06, S10, S13 |
 
 ## Data and licenses
 
-- Eval: a CameraBench subset (expert camera-motion labels), *Tears of Steel* / *Sintel* / *Spring* / *Charge* (Blender open movies, CC BY), Pexels clips, and venue clips filmed by consenting non-team members.
-- Credits for every clip are listed in `eval/CREDITS.md` and on the reel end card.
-- No copyrighted film footage in the dataset or demo.
+- Evaluation clips come from CameraBench (CC BY 4.0), *Tears of Steel* (CC BY 3.0), and *Sintel* (CC BY 3.0).
+- Credits and modifications are listed in [`eval/CREDITS.md`](eval/CREDITS.md).
+- No copyrighted film footage is allowed in the dataset or demo.
+- Generated re-shoots are labeled as AI-generated.
 
 ## Team
 
-Rishika · Prajesh · Akash · Siva
+Rishika, Prajesh, Akash, Siva
