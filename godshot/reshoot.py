@@ -1231,6 +1231,7 @@ def reshoot(
     polish: bool = False,
     take: int = 0,
     direction: tuple[Any, Any] | None = None,
+    action_fix: str = "",
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
@@ -1267,6 +1268,7 @@ def reshoot(
     directed = direction is not None
     beats = [] if directed else performance_beats(Path(clip), scene_orig)  # S14 director covers it
     orig_hfov = scene_orig.camera.hfov_deg
+    fix_line = f"\nCRITICAL FRAME-BY-FRAME ACTION FIX: {action_fix.strip()}" if action_fix.strip() else ""
     suffix = f"\n(Alternative take {take + 1}.)" if take else ""
     raw = work / "raw.mp4"
     if mode == "blockout":
@@ -1278,14 +1280,14 @@ def reshoot(
             scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
             directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
-        prompt = _directed(base, direction) + suffix
+        prompt = _directed(base, direction) + fix_line + suffix
         generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
     else:
         base = describe_shot(
             scene_edited, want, polish=polish, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
             directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
-        prompt = _directed(base, direction) + suffix
+        prompt = _directed(base, direction) + fix_line + suffix
         generate_video(ref_bytes, prompt, raw, duration=f"{round(out_len):d}s", resolution=resolution)
     out = burn_label(raw, Path(out))
     meta = {
@@ -1330,6 +1332,8 @@ def reshoot_best(
     w_preserve: float = 0.4,
     request: str = "",
     critic_rounds: int = 0,
+    verify_actions: bool = False,
+    action_retries: int = 1,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Generate `n` takes in parallel, score each with `conformance` vs the edited map, keep the best.
@@ -1363,10 +1367,15 @@ def reshoot_best(
         else:
             brief = direct_mod.analyze_scene(clip, scene_orig)
 
-    def make(k: int, take_pack: Any) -> Path:
+    action_beats = performance_beats(Path(clip), scene_orig) if verify_actions else None
+
+    def make(k: int, take_pack: Any, action_fix: str = "") -> Path:
         out = out_dir / f"take_{k + 1}.mp4"
+        extra = {"action_fix": action_fix} if action_fix else {}
         try:
-            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+            return reshoot(
+                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
+            )
         except OmniError as e:  # generic INVALID_ARGUMENT, more often on long prompts: retry once, compact
             log.warning("take %d failed (%s); retrying once with a compact prompt", k + 1, e)
             if take_pack is not None:
@@ -1375,7 +1384,9 @@ def reshoot_best(
                 from godshot import direct as direct_mod  # S14
 
                 take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
-            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+            return reshoot(
+                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
+            )
 
     def score(k: int, path: Path) -> dict[str, Any]:
         # score the UNLABELLED video (the badge could confuse the verifier)
@@ -1383,6 +1394,17 @@ def reshoot_best(
         conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
         row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
                "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        if verify_actions:
+            act = compare_action_frames(
+                clip, raw, beats=action_beats, work_dir=work_dir_for(path) / "action_compare"
+            )
+            if act is not None:
+                row |= {
+                    "action_score": act["action_score"],
+                    "action_frames": act["frames"],
+                    "action_correction": act["correction"],
+                    "combined": round(0.55 * conf["score"] + 0.45 * act["action_score"], 3),
+                }
         if brief is not None:
             from godshot import direct as direct_mod  # S14
 
@@ -1405,6 +1427,22 @@ def reshoot_best(
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
         takes = list(pool.map(lambda k: score(k, make(k, pack)), range(n)))
+
+    if verify_actions and action_retries > 0:
+        for _r in range(action_retries):
+            best_so_far = max(takes, key=rank)
+            fix_text = best_so_far.get("action_correction", "")
+            if best_so_far.get("action_score", 1.0) >= 0.82 or not fix_text:
+                break
+            k = len(takes)
+            log.info(
+                "frame-by-frame action score %.2f < 0.82 on take %d; generating corrective take %d: %s",
+                best_so_far["action_score"],
+                best_so_far["take"],
+                k + 1,
+                fix_text,
+            )
+            takes.append(score(k, make(k, pack, action_fix=fix_text)))
 
     critiques = []
     if pack is not None and critic_rounds > 0:
@@ -1429,13 +1467,13 @@ def reshoot_best(
             if crit.verdict == "accept" or not crit.corrections.strip():
                 break
             corrections.append(crit.corrections.strip())
-            k = n + r
+            k = len(takes)
             takes.append(score(k, make(k, replace(pack, corrections=list(corrections)))))
 
     best = max(takes, key=rank)
     final = out_dir / "reshoot_best.mp4"
     shutil.copyfile(best["video"], final)
-    hidden = ("conformance", "preservation_items", "fulfilment_items", "_pres", "_ful")
+    hidden = ("conformance", "preservation_items", "fulfilment_items", "action_frames", "_pres", "_ful")
     summary = {
         "label": AI_LABEL,
         "video": str(final),
@@ -1446,6 +1484,13 @@ def reshoot_best(
         "takes": [{k: v for k, v in r.items() if k not in hidden} for r in takes],
         "checks": best["conformance"]["checks"],
     }
+    if "action_score" in best:
+        summary |= {
+            "action_score": best["action_score"],
+            "action_frames": best.get("action_frames", []),
+            "action_correction": best.get("action_correction", ""),
+            "combined": best.get("combined", best["score"]),
+        }
     if brief is not None:  # S14
         summary |= {"directed": direct, "request": request, "preservation": best["preservation"],
                     "kept": best["kept"], "fulfilment": best.get("fulfilment"), "done": best.get("done"),
@@ -1532,3 +1577,168 @@ def conformance(generated_clip: Path, scene_edited: SceneV1, work_dir: Path | No
         json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
     )
     return result
+
+
+# --------------------------------------------------------------------------- frame-by-frame action comparison
+
+
+class ActionFrameCheck(BaseModel):
+    t_label: str
+    orig_action: str
+    gen_action: str
+    match: bool
+    fix: str = ""
+
+
+class ActionComparison(BaseModel):
+    action_score: float = Field(ge=0.0, le=1.0)
+    frames: list[ActionFrameCheck] = Field(default_factory=list)
+    correction: str = ""
+
+
+ACTION_COMPARE_PROMPT = """Top row = ORIGINAL video frames at timestamps {labels}.
+Bottom row = AI RE-SHOOT of the same scene filmed from a DIFFERENT camera angle at the exact same timestamps.
+
+Compare frame-by-frame what the person is physically DOING and how props/objects react, IGNORING the
+intentional change in camera angle or framing.
+
+For each timestamp column, report:
+- orig_action: what the person + key props are physically doing in the TOP frame
+- gen_action: what the person + key props are physically doing in the BOTTOM frame
+- match: true ONLY if the person performs the same physical action/pose AND key props react/orient properly
+- fix: if match is false, a brief concrete fix (e.g. "punch straight down with fist instead of closing lid")
+
+Then compute:
+- action_score: fraction of matched frames (0.0 to 1.0)
+- correction: 1–2 concrete sentences telling the video generator EXACTLY what physical action or prop
+  behavior to fix (with timestamps) on the next take. Leave empty string if action_score >= 0.85.
+"""
+
+
+def _pick_action_times(dur: float, beats: Sequence[dict[str, Any]] | None = None, k: int = 6) -> list[float]:
+    """Pick `k` matched timestamps across [0, dur], always hitting peak action beats & impact moments."""
+    base = [dur * f for f in (0.12, 0.30, 0.48, 0.66, 0.84)]
+    extra: list[float] = []
+    if beats:
+        # Highlight shortest / highest-intensity action beats (mid-swing + immediate aftermath)
+        ranked = sorted(
+            beats,
+            key=lambda b: (
+                0 if any(w in str(b.get("action", "")).lower() for w in (
+                    "punch", "hit", "slam", "smash", "strike", "fist", "throw", "grab", "kick", "jump",
+                )) else 1,
+                max(0.05, float(b.get("t1", 0)) - float(b.get("t0", 0))),
+            ),
+        )
+        top = ranked[0]
+        t0, t1 = float(top.get("t0", 0.0)), float(top.get("t1", 0.0))
+        extra.extend([t0 + 0.55 * (t1 - t0), min(dur * 0.95, t1 + 0.15)])
+    pts = sorted(max(0.1, min(dur - 0.1, t)) for t in [*base, *extra])
+    # Deduplicate points that are too close, prioritizing `extra` peak times
+    merged: list[float] = []
+    for t in pts:
+        if not merged or abs(t - merged[-1]) >= max(0.35, dur / (k * 3)):
+            merged.append(t)
+        elif any(abs(t - e) < 0.05 for e in extra):
+            merged[-1] = t
+    while len(merged) > k:
+        # Drop the least-unique non-peak timestamp
+        idx = min(
+            range(len(merged)),
+            key=lambda i: (
+                1 if any(abs(merged[i] - e) < 0.15 for e in extra) else 0,
+                min(
+                    merged[i] - merged[i - 1] if i > 0 else 999.0,
+                    merged[i + 1] - merged[i] if i + 1 < len(merged) else 999.0,
+                ),
+            ),
+        )
+        merged.pop(idx)
+    return merged
+
+
+def compare_action_frames(
+    orig_clip: Path,
+    gen_clip: Path,
+    beats: Sequence[dict[str, Any]] | None = None,
+    work_dir: Path | None = None,
+    model: str | None = None,
+) -> dict[str, Any] | None:
+    """Compare original vs generated video frame-by-frame on a Before/After contact sheet using Gemini.
+
+    Scores whether the actor performs the SAME physical actions & prop interactions (ignoring the
+    camera angle change) and returns a targeted correction string if anything is missed.
+    """
+    from google.genai import types
+
+    from godshot import ingest
+
+    orig_clip, gen_clip = Path(orig_clip), Path(gen_clip)
+    raw = work_dir_for(gen_clip) / "raw.mp4"
+    if raw.exists():
+        gen_clip = raw
+    try:
+        o_info = ingest.probe(orig_clip, check_length=False)
+        g_info = ingest.probe(gen_clip, check_length=False)
+    except Exception as e:
+        log.warning("action compare probe failed: %s", e)
+        return None
+    out_dir = Path(work_dir) if work_dir else gen_clip.parent / "action_compare"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    times = _pick_action_times(o_info.duration_s, beats=beats, k=6)
+    o_last = o_info.duration_s - 1.2 / o_info.fps
+    g_last = g_info.duration_s - 1.2 / g_info.fps
+    scale = g_info.duration_s / max(o_info.duration_s, 0.1)
+
+    tw, th, hdr = 320, 180, 22
+    sheet = Image.new("RGB", (tw * len(times), th * 2 + hdr), (18, 20, 24))
+    draw = ImageDraw.Draw(sheet)
+    labels: list[str] = []
+    for i, t in enumerate(times):
+        lbl = mmss(t)[:7]
+        labels.append(lbl)
+        of = Image.open(ingest.frame_at(orig_clip, min(t, o_last), out_dir / "orig")).resize((tw, th))
+        gf = Image.open(ingest.frame_at(gen_clip, min(t * scale, g_last), out_dir / "gen")).resize((tw, th))
+        sheet.paste(of.convert("RGB"), (i * tw, hdr))
+        sheet.paste(gf.convert("RGB"), (i * tw, hdr + th))
+        draw.text((i * tw + 8, 4), f"{lbl}  (top=ORIG, bot=NEW)", fill=(230, 234, 240))
+    sheet_path = out_dir / "action_compare.jpg"
+    sheet.save(sheet_path, quality=88)
+
+    cfg = load_config()
+    model = model or cfg.MODEL_CHEAP
+    prompt = ACTION_COMPARE_PROMPT.format(labels=", ".join(labels))
+
+    def call() -> dict[str, Any]:
+        resp = get_client().models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=sheet_path.read_bytes(), mime_type="image/jpeg"),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=ActionComparison.model_json_schema(),
+                thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+            ),
+        )
+        return json.loads(resp.text or "{}")
+
+    try:
+        data = cached(
+            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v1"],
+            call,
+            kind="action_compare",
+        )
+        parsed = ActionComparison.model_validate(data)
+    except Exception as e:
+        log.warning("action compare unavailable (%s: %s)", type(e).__name__, e)
+        return None
+    res = {
+        "action_score": round(parsed.action_score, 3),
+        "frames": [f.model_dump() for f in parsed.frames],
+        "correction": parsed.correction.strip(),
+        "sheet": str(sheet_path),
+    }
+    (out_dir / "action_compare.json").write_text(json.dumps(res, indent=2) + "\n", encoding="utf-8")
+    return res

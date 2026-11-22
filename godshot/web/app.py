@@ -302,8 +302,17 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
     def work(job: dict[str, Any]) -> None:
         from godshot import reshoot
 
-        job["stage"] = "generating 2 takes in parallel (Omni) + picking best"
-        summary = reshoot.reshoot_best(clip, _base_scene(d), edited, d / "reshoot_takes", n=2, workers=2)
+        job["stage"] = "generating 2 takes + frame-by-frame action verification"
+        summary = reshoot.reshoot_best(
+            clip,
+            _base_scene(d),
+            edited,
+            d / "reshoot_takes",
+            n=2,
+            workers=2,
+            verify_actions=True,
+            action_retries=1,
+        )
         out = d / "reshoot.mp4"
         shutil.copyfile(summary["video"], out)
         job["conformance"] = {
@@ -311,6 +320,8 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
             "hits": summary["hits"],
             "usable": summary["usable"],
             "best_take": summary["best_take"],
+            "action_score": summary.get("action_score"),
+            "combined": summary.get("combined"),
         }
         job["reshoot_url"] = _url(out)
 
