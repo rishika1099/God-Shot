@@ -954,6 +954,8 @@ def edit_prompt(
     time_scale: float = 1.0,
     directed: bool = False,
     scene_orig: SceneV1 | None = None,
+    reproject_mode: bool = False,
+    novel_view_brief: str = "",
 ) -> str:
     """Prompt for Omni `edit`: the blockout gives ONLY the camera + positions.
 
@@ -997,13 +999,30 @@ def edit_prompt(
             "images, while letting them naturally be viewed from any new angle (including from behind) "
             "to match the blockout video."
         )
+    if reproject_mode:
+        nv = f"\nNOVEL-VIEW ANALYSIS: {novel_view_brief.strip()}" if novel_view_brief.strip() else ""
+        header = (
+            "Re-render and photorealistically refine this 3D-reprojected novel-view video into clean, crisp "
+            "footage matching the reference images. The input video is a true 3D RGB-D point-cloud "
+            "projection of the real room plus either projected real pixels or a real 3D pose-tracked "
+            "figure performing the EXACT real body, arm, fist, and head motion from the original clip. "
+            "Follow EVERY camera angle, arm swing, fist strike, recoil, and timing frame-for-frame; "
+            f"seamlessly inpaint any point-cloud gaps as real room surfaces. "
+            f"Entity colors (where synthetic boxes/figures appear): {'; '.join(legend)}. "
+            f"{keep} {only}".rstrip()
+            + nv
+        )
+    else:
+        header = (
+            "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
+            "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and "
+            "where people and things are; they do NOT show the performance beyond the animated arm/fist "
+            f"motion. In the previs: {'; '.join(legend)}. "
+            f"Keep the camera motion, timing, framing, and arm/fist movements EXACTLY as in the input video "
+            f"(dark hair side = back of head, dark visor side = front face). {keep} {only}".rstrip()
+        )
     return (
-        "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
-        "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and where "
-        "people and things are; they do NOT show the performance beyond the animated arm/fist motion. "
-        f"In the previs: {'; '.join(legend)}. "
-        f"Keep the camera motion, timing, framing, and arm/fist movements EXACTLY as in the input video "
-        f"(dark hair side = back of head, dark visor side = front face). {keep} {only}".rstrip()
+        header
         + "\n"
         + describe_shot(
             scene_edited,
@@ -1248,6 +1267,8 @@ def reshoot(
     take: int = 0,
     direction: tuple[Any, Any] | None = None,
     action_fix: str = "",
+    guide_override: Path | None = None,
+    novel_view_brief: str = "",
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
@@ -1256,19 +1277,20 @@ def reshoot(
     (`time_scale` in reshoot.json).
     The people keep their original performance: `performance_beats` (cached) goes into the prompt.
     mode="blockout" (default): map-exact grey-box guide + refs → Omni `edit` (motion comes from the map).
+    mode="reproject": hybrid 3D RGB-D point-cloud + real 3D MediaPipe pose guide + novel-view analysis.
     mode="text": refs + the geometry-derived description → Omni image/reference→video (fallback).
     `take` > 0 asks for a different sample of the same request (used by `reshoot_best`).
     `direction` = (SceneBrief, Direction) from S14 `direct.prepare`: the geometric prompt is kept verbatim and
     the director's performance notes + must-keep list are appended (S14, Akash; opt-in).
     Artifacts go to `<out stem>_work/` (refs, blockout.mp4, raw.mp4 = unlabelled, reshoot.json).
     """
-    if mode not in ("blockout", "text"):
-        raise ValueError(f"mode must be 'blockout' or 'text', got {mode!r}")
+    if mode not in ("blockout", "reproject", "text"):
+        raise ValueError(f"mode must be 'blockout', 'reproject', or 'text', got {mode!r}")
     work = work_dir_for(out)
     work.mkdir(parents=True, exist_ok=True)
     full = scene_edited.clip.duration_s
     want = full if duration is None else min(full, _seconds(duration))
-    if mode == "blockout":
+    if mode in ("blockout", "reproject"):
         out_len = min(want, OMNI_EDIT_MAX_S)
     else:
         out_len = float(max(TEXT_MIN_S, min(TEXT_MAX_S, round(want))))
@@ -1287,7 +1309,47 @@ def reshoot(
     fix_line = f"\nCRITICAL FRAME-BY-FRAME ACTION FIX: {action_fix.strip()}" if action_fix.strip() else ""
     suffix = f"\n(Alternative take {take + 1}.)" if take else ""
     raw = work / "raw.mp4"
-    if mode == "blockout":
+    effective_mode = mode
+    if mode == "reproject":
+        from godshot import reproject
+
+        colors = blockout_palette(scene_edited)
+        if guide_override is not None and Path(guide_override).exists():
+            guide = Path(guide_override)
+            nv_brief = novel_view_brief
+        elif reproject.available():
+            try:
+                guide = reproject.render_reprojected_guide(
+                    Path(clip), scene_orig, scene_edited, work / "reprojected.mp4",
+                    t1=want, colors=colors, time_scale=time_scale, beats=beats,
+                )  # fmt: skip
+                nv_brief = novel_view_brief or reproject.analyze_novel_view(
+                    Path(clip), guide, work / "novel_view", beats=beats
+                )
+            except Exception as e:
+                log.warning("3D reprojection failed (%s: %s); falling back to blockout", type(e).__name__, e)
+                effective_mode = "blockout"
+                guide = render_blockout(
+                    scene_edited, work / "blockout.mp4", t1=want, colors=colors,
+                    time_scale=time_scale, beats=beats,
+                )  # fmt: skip
+                nv_brief = ""
+        else:
+            log.warning("reproject optional deps not installed; falling back to blockout")
+            effective_mode = "blockout"
+            guide = render_blockout(
+                scene_edited, work / "blockout.mp4", t1=want, colors=colors,
+                time_scale=time_scale, beats=beats,
+            )  # fmt: skip
+            nv_brief = ""
+        base = edit_prompt(
+            scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
+            directed=directed, scene_orig=scene_orig,
+            reproject_mode=(effective_mode == "reproject"), novel_view_brief=nv_brief,
+        )  # fmt: skip
+        prompt = _directed(base, direction) + fix_line + suffix
+        generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
+    elif mode == "blockout":
         colors = blockout_palette(scene_edited)
         guide = render_blockout(
             scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale, beats=beats
@@ -1309,7 +1371,7 @@ def reshoot(
     meta = {
         "label": AI_LABEL,
         "model": load_config().MODEL_RESHOOT,
-        "mode": mode,
+        "mode": effective_mode,
         "take": take,
         "directed": directed,
         "source_duration_s": full,
@@ -1384,10 +1446,34 @@ def reshoot_best(
             brief = direct_mod.analyze_scene(clip, scene_orig)
 
     action_beats = performance_beats(Path(clip), scene_orig) if verify_actions else None
+    shared_extra: dict[str, Any] = {}
+    if kwargs.get("mode") == "reproject" and "guide_override" not in kwargs:
+        from godshot import reproject
+
+        if reproject.available():
+            try:
+                cap = kwargs.get("duration")
+                full = scene_edited.clip.duration_s
+                want = full if cap is None else min(full, _seconds(cap))
+                out_len = min(want, OMNI_EDIT_MAX_S)
+                ts = want / out_len
+                b = action_beats if action_beats is not None else performance_beats(Path(clip), scene_orig)
+                colors = blockout_palette(scene_edited)
+                guide_path = reproject.render_reprojected_guide(
+                    Path(clip), scene_orig, scene_edited, out_dir / "reprojected_guide.mp4",
+                    t1=want, colors=colors, time_scale=ts, beats=b,
+                )  # fmt: skip
+                nv_brief = reproject.analyze_novel_view(
+                    Path(clip), guide_path, out_dir / "novel_view", beats=b
+                )
+                shared_extra = {"guide_override": guide_path, "novel_view_brief": nv_brief}
+            except Exception as e:
+                log.warning("shared 3D reprojection failed (%s: %s); falling back to blockout",
+                            type(e).__name__, e)
 
     def make(k: int, take_pack: Any, action_fix: str = "") -> Path:
         out = out_dir / f"take_{k + 1}.mp4"
-        extra = {"action_fix": action_fix} if action_fix else {}
+        extra = {**shared_extra, **({"action_fix": action_fix} if action_fix else {})}
         try:
             return reshoot(
                 clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
