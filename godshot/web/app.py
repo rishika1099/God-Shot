@@ -300,12 +300,35 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
     edited = SceneV1.model_validate(body.scene) if body.scene else _base_scene(d)
 
     def work(job: dict[str, Any]) -> None:
-        from godshot import reshoot
+        from godshot import reproject, reshoot
 
-        job["stage"] = "generating (Omni, ~30-90 s)"
-        out = reshoot.reshoot(clip, _base_scene(d), edited, d / "reshoot.mp4")
-        job["stage"] = "checking conformance"
-        job["conformance"] = reshoot.conformance(out, edited)
+        use_reproj = reproject.available()
+        job["stage"] = (
+            "3D projecting novel angle + generating 2 takes + action verification"
+            if use_reproj
+            else "generating 2 takes + frame-by-frame action verification"
+        )
+        summary = reshoot.reshoot_best(
+            clip,
+            _base_scene(d),
+            edited,
+            d / "reshoot_takes",
+            n=2,
+            workers=2,
+            mode="reproject" if use_reproj else "blockout",
+            verify_actions=True,
+            action_retries=1,
+        )
+        out = d / "reshoot.mp4"
+        shutil.copyfile(summary["video"], out)
+        job["conformance"] = {
+            "score": summary["score"],
+            "hits": summary["hits"],
+            "usable": summary["usable"],
+            "best_take": summary["best_take"],
+            "action_score": summary.get("action_score"),
+            "combined": summary.get("combined"),
+        }
         job["reshoot_url"] = _url(out)
 
     return {"job_id": _start_job("reshoot", clip_id, work)}

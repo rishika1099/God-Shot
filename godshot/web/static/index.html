@@ -124,7 +124,6 @@
           <span id="keyTelemetry" class="mono key-telemetry"></span>
         </div>
         <div class="head-actions">
-          <button id="sceneLockBtn" type="button" class="btn ghost xs" aria-pressed="false" title="Lock actors and props so only the camera moves">🔓 Actors Editable</button>
           <button id="curveToggle" type="button" class="btn ghost xs active-pill" aria-pressed="true" title="Smooth curved motion path">Smooth Curves</button>
           <button id="undoBtn" type="button" class="btn ghost xs" disabled aria-label="Undo edit">↶ Undo</button>
           <button id="redoBtn" type="button" class="btn ghost xs" disabled aria-label="Redo edit">↷ Redo</button>
@@ -160,8 +159,8 @@
         </div>
 
         <div class="tool-group aim-group">
-          <label class="toggle-pill" for="autoAim">
-            <input id="autoAim" type="checkbox" checked>
+          <label class="toggle-pill" for="autoAim" title="Optional: auto-point camera at selected target">
+            <input id="autoAim" type="checkbox">
             <span>Look-At</span>
           </label>
           <label for="aimTarget" class="visually-hidden">Look-At subject</label>
@@ -206,8 +205,8 @@
           <span class="kf-title">Keyframe Tracks</span>
           <div class="kf-controls">
             <div class="seg-toggle" role="group" aria-label="Actor drag behavior">
-              <button id="actorModeKey" type="button" class="seg-btn active" aria-pressed="true">Actor: Animate @ t</button>
-              <button id="actorModeAll" type="button" class="seg-btn" aria-pressed="false">Reposition All</button>
+              <button id="actorModeAll" type="button" class="seg-btn active" aria-pressed="true" title="Dragging or turning an actor keeps that placement/angle across the whole shot">Actor: Hold All Shot</button>
+              <button id="actorModeKey" type="button" class="seg-btn" aria-pressed="false" title="Dragging or turning an actor only keyframes at the current timestamp">Animate @ t</button>
             </div>
             <button id="addKeyBtn" type="button" class="btn ghost xs">+ Cam Key</button>
             <button id="delKeyBtn" type="button" class="btn ghost xs" disabled>Delete Key</button>

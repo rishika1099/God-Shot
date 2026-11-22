@@ -257,8 +257,103 @@ def _box_faces(cx: float, cy: float, w: float, d: float, rot_deg: float, z0: flo
     return faces
 
 
+def _limb_faces(
+    p0: tuple[float, float, float], p1: tuple[float, float, float], half: float = 0.055
+) -> list[list[tuple[float, float, float]]]:
+    """3D prism faces connecting two 3D points (e.g. shoulder → elbow or elbow → fist)."""
+    dx, dy, dz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+    ln = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if ln < 1e-4:
+        return []
+    ax, ay, az = dx / ln, dy / ln, dz / ln
+    ref = (0.0, 0.0, 1.0) if abs(az) < 0.9 else (1.0, 0.0, 0.0)
+    ux, uy, uz = ay * ref[2] - az * ref[1], az * ref[0] - ax * ref[2], ax * ref[1] - ay * ref[0]
+    ul = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+    ux, uy, uz = ux / ul * half, uy / ul * half, uz / ul * half
+    vx, vy, vz = (ay * uz - az * uy) / half, (az * ux - ax * uz) / half, (ax * uy - ay * ux) / half
+    vx, vy, vz = vx * half, vy * half, vz * half
+
+    def ring(p: tuple[float, float, float]) -> list[tuple[float, float, float]]:
+        return [
+            (p[0] - ux - vx, p[1] - uy - vy, p[2] - uz - vz),
+            (p[0] + ux - vx, p[1] + uy - vy, p[2] + uz - vz),
+            (p[0] + ux + vx, p[1] + uy + vy, p[2] + uz + vz),
+            (p[0] - ux + vx, p[1] - uy + vy, p[2] - uz + vz),
+        ]
+
+    r0, r1 = ring(p0), ring(p1)
+    faces = [[r0[i], r0[(i + 1) % 4], r1[(i + 1) % 4], r1[i]] for i in range(4)]
+    faces.append(r1)
+    return faces
+
+
+def _lerp3(
+    a: tuple[float, float, float], b: tuple[float, float, float], f: float
+) -> tuple[float, float, float]:
+    f = max(0.0, min(1.0, f))
+    return (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f)
+
+
+def _actor_arm_pose(
+    actor_desc: str, t: float, beats: Sequence[dict[str, Any]] | None
+) -> tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+] | None:
+    """Return (r_elbow, r_hand, l_elbow, l_hand) in actor-local (right, forward, up) offsets from the
+    actor's center at shoulder height, driven by timestamped performance beats."""
+    if not beats:
+        return None
+    ad = actor_desc.lower()
+    words = {w for w in ad.split() if len(w) >= 4}
+    active: dict[str, Any] | None = None
+    for b in beats:
+        t0, t1 = float(b.get("t0", 0.0)), float(b.get("t1", 0.0))
+        if t0 - 0.15 <= t <= t1 + 0.15:
+            who = str(b.get("who", "")).lower()
+            if not words or who in ad or ad in who or any(w in who for w in words):
+                active = b
+                break
+    re, rh = (0.31, 0.04, -0.26), (0.31, 0.08, -0.52)
+    le, lh = (-0.31, 0.04, -0.26), (-0.31, 0.08, -0.52)
+    if active is None:
+        return re, rh, le, lh
+    t0, t1 = float(active.get("t0", 0.0)), float(active.get("t1", 0.0))
+    u = max(0.0, min(1.0, (t - t0) / max(0.1, t1 - t0)))
+    act = str(active.get("action", "")).lower()
+    if any(k in act for k in ("punch", "slam", "smash", "hit", "strike", "bang", "fist")):
+        le, lh = (-0.30, 0.24, -0.18), (-0.22, 0.48, -0.34)
+        up_e, up_h = (0.44, -0.08, 0.26), (0.36, -0.02, 0.62)
+        down_e, down_h = (0.28, 0.34, -0.08), (0.14, 0.64, -0.44)
+        rec_e, rec_h = (0.34, 0.26, 0.02), (0.22, 0.50, -0.28)
+        if u < 0.45:
+            f = u / 0.45
+            re, rh = _lerp3((0.32, 0.16, -0.16), up_e, f), _lerp3((0.26, 0.34, -0.28), up_h, f)
+        elif u < 0.78:
+            f = (u - 0.45) / 0.33
+            re, rh = _lerp3(up_e, down_e, f), _lerp3(up_h, down_h, f)
+        else:
+            f = (u - 0.78) / 0.22
+            re, rh = _lerp3(down_e, rec_e, f), _lerp3(down_h, rec_h, f)
+    elif any(k in act for k in ("cover", "forehead", "eyes", "face")):
+        re, rh = (0.32, 0.22, 0.04), (0.06, 0.26, 0.28)
+    elif any(k in act for k in ("recoil", "raise", "lift", "wave", "upward")):
+        re, rh = (0.38, 0.24, 0.14), (0.28, 0.36, 0.42)
+    elif any(k in act for k in ("lean", "hold", "rest", "reach", "grab", "point", "type", "laptop")):
+        re, rh = (0.30, 0.24, -0.18), (0.20, 0.48, -0.34)
+        le, lh = (-0.30, 0.24, -0.18), (-0.20, 0.48, -0.34)
+    return re, rh, le, lh
+
+
 def _blockout_frame(
-    scene: SceneV1, t: float, w: int, h: int, colors: dict[str, str] | None = None
+    scene: SceneV1,
+    t: float,
+    w: int,
+    h: int,
+    colors: dict[str, str] | None = None,
+    beats: Sequence[dict[str, Any]] | None = None,
 ) -> Image.Image:
     cam = _Cam(geometry.interp_camera(scene, t), scene.camera.hfov_deg, w, h)
     img = Image.new("RGB", (w, h), (28, 30, 34))
@@ -288,14 +383,22 @@ def _blockout_frame(
         seg = _clip_near([cam.to_cam((min(xs), gy, 0.0)), cam.to_cam((max(xs), gy, 0.0))])
         if len(seg) == 2:
             draw.line([cam.project(c) for c in seg], fill=(92, 95, 102), width=1)
-    # walls
-    for (x0, y0), (x1, y1) in zip(outline, outline[1:] + outline[:1], strict=True):
-        add(
-            [(x0, y0, 0.0), (x1, y1, 0.0), (x1, y1, WALL_H), (x0, y0, WALL_H)],
-            (176, 178, 184),
-            (120, 122, 128),
-            layer=walls,
-        )
+    # walls: split into ~1.2m vertical bays with alternating subtle grey shades so Omni sees clear
+    # background parallax and optical flow during orbits/pans instead of a blank flat wall
+    for w_idx, ((x0, y0), (x1, y1)) in enumerate(zip(outline, outline[1:] + outline[:1], strict=True)):
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        bays = max(1, min(12, round(seg_len / 1.2)))
+        for b in range(bays):
+            f0, f1 = b / bays, (b + 1) / bays
+            bx0, by0 = x0 + (x1 - x0) * f0, y0 + (y1 - y0) * f0
+            bx1, by1 = x0 + (x1 - x0) * f1, y0 + (y1 - y0) * f1
+            tone = (176, 178, 184) if (w_idx + b) % 2 == 0 else (154, 158, 166)
+            add(
+                [(bx0, by0, 0.0), (bx1, by1, 0.0), (bx1, by1, WALL_H), (bx0, by0, WALL_H)],
+                tone,
+                (118, 122, 130),
+                layer=walls,
+            )
     # objects
     for o in scene.objects:
         z0, z1 = OBJ_Z.get(o.type.lower(), (0.0, 1.0))
@@ -306,17 +409,51 @@ def _blockout_frame(
             )
         ):
             add(face, _shade(base, 1.15 if k == 4 else 0.85 + 0.05 * k))
-    # actors: body box + head box, oriented by facing_deg
+    # actors: body box + head box, oriented by facing_deg (distinct front face vs dark back-of-head hair)
     for a in scene.actors:
         ax, ay, facing, visible = geometry.interp_actor(a, t)
         if not visible:
             continue
         base = _hex((colors or {}).get(a.id, a.color), (231, 76, 60))
         bw, bd, bh = ACTOR_BODY
+        body_shade = (0.62, 0.85, 1.05, 0.85, 1.1)  # back, right, front, left, top
         for k, face in enumerate(_box_faces(ax, ay, bw, bd, facing, 0.0, bh)):
-            add(face, _shade(base, 1.1 if k == 4 else 0.8 + 0.06 * k))
-        for face in _box_faces(ax, ay, ACTOR_HEAD, ACTOR_HEAD, facing, bh, bh + ACTOR_HEAD):
-            add(face, (224, 190, 160))
+            add(face, _shade(base, body_shade[k]))
+        head_cols = (
+            (52, 40, 32),     # k=0 back (hair)
+            (210, 176, 146),  # k=1 right side
+            (238, 206, 174),  # k=2 front (face)
+            (210, 176, 146),  # k=3 left side
+            (52, 40, 32),     # k=4 top (hair)
+        )
+        for k, face in enumerate(_box_faces(ax, ay, ACTOR_HEAD, ACTOR_HEAD, facing, bh, bh + ACTOR_HEAD)):
+            add(face, head_cols[k])
+        # Small dark eyes/visor patch slightly proud of the front (+y) head face so Omni reads front vs back
+        r = math.radians(facing)
+        ux, uy = math.cos(r), math.sin(r)
+        vx, vy = -math.sin(r), math.cos(r)
+        hw, fd = ACTOR_HEAD * 0.32, ACTOR_HEAD * 0.5 + 0.008
+        z0, z1 = bh + ACTOR_HEAD * 0.48, bh + ACTOR_HEAD * 0.72
+        p_l = (ax - hw * ux + fd * vx, ay - hw * uy + fd * vy)
+        p_r = (ax + hw * ux + fd * vx, ay + hw * uy + fd * vy)
+        add([(*p_r, z0), (*p_l, z0), (*p_l, z1), (*p_r, z1)], (36, 36, 42), (36, 36, 42))
+        # Articulated 3D arms + fists driven by timestamped performance beats (shows punches, gestures)
+        arm_pose = _actor_arm_pose(a.visual_description, t, beats)
+        if arm_pose is not None:
+            re, rh, le, lh = arm_pose
+            sz = bh - 0.12
+            for sx, e_off, h_off in ((bw * 0.52, re, rh), (-bw * 0.52, le, lh)):
+                p_sh = (ax + sx * ux, ay + sx * uy, sz)
+                p_el = (ax + e_off[0] * ux + e_off[1] * vx, ay + e_off[0] * uy + e_off[1] * vy, sz + e_off[2])
+                p_ha = (ax + h_off[0] * ux + h_off[1] * vx, ay + h_off[0] * uy + h_off[1] * vy, sz + h_off[2])
+                for f_poly in _limb_faces(p_sh, p_el, half=0.06):
+                    add(f_poly, _shade(base, 0.92))
+                for f_poly in _limb_faces(p_el, p_ha, half=0.052):
+                    add(f_poly, (220, 184, 150))
+                for f_poly in _box_faces(
+                    p_ha[0], p_ha[1], 0.13, 0.13, facing, p_ha[2] - 0.065, p_ha[2] + 0.065
+                ):
+                    add(f_poly, (236, 200, 168))
 
     # The camera is inside the room, so every wall is behind every object: walls first, then objects
     # and actors by depth (painter's algorithm, far → near).
@@ -334,6 +471,7 @@ def render_blockout(
     t1: float | None = None,
     colors: dict[str, str] | None = None,
     time_scale: float = 1.0,
+    beats: Sequence[dict[str, Any]] | None = None,
 ) -> Path:
     """Grey-box previs of `scene` filmed along its EXACT camera track (x, y, yaw, hfov), as an mp4.
 
@@ -359,7 +497,8 @@ def render_blockout(
     assert proc.stdin is not None
     try:
         for i in range(n):
-            proc.stdin.write(_blockout_frame(scene, t0 + i / fps * time_scale, w, h, colors).tobytes())
+            frame = _blockout_frame(scene, t0 + i / fps * time_scale, w, h, colors, beats=beats)
+            proc.stdin.write(frame.tobytes())
     finally:
         proc.stdin.close()
         err = proc.stderr.read().decode() if proc.stderr else ""
@@ -538,8 +677,9 @@ def shot_facts(scene: SceneV1, duration_s: float | None = None) -> dict[str, Any
 
 
 SHOT_RULES = (
-    "One continuous shot, no cuts. Keep the room, the people, their faces, their clothing, their "
-    "performance and every event identical to the original clip and the reference images."
+    "One continuous, fluid 24fps Steadicam shot, no cuts or slideshow transitions. Keep each person's "
+    "identity, hair, and outfit strictly separate (never transfer props, gauntlets, or clothing between "
+    "people), following every camera angle, move, and pose in the input video."
 )
 
 
@@ -564,6 +704,150 @@ def _beat_lines(beats: list[dict[str, Any]], time_scale: float) -> list[str]:
     ]
 
 
+def _actor_view_side(cam: tuple[float, float, float], ax: float, ay: float, facing_deg: float) -> str:
+    """Is the camera looking at the actor's front, back, or side profile?"""
+    dx, dy = cam[0] - ax, cam[1] - ay
+    dist = math.hypot(dx, dy)
+    if dist < 1e-4:
+        return "front"
+    r = math.radians(facing_deg)
+    fwd = (-math.sin(r), math.cos(r))
+    dot = (dx * fwd[0] + dy * fwd[1]) / dist
+    if dot < -0.35:
+        return "back"
+    if dot > 0.35:
+        return "front"
+    return "side"
+
+
+def _visible_object_ids(scene: SceneV1, dur: float) -> set[str]:
+    """Object IDs that appear inside the edited camera's FOV at least once during the shot."""
+    if not scene.objects or dur <= 0:
+        return {o.id for o in scene.objects}
+    samples = [dur * i / 8 for i in range(9)]
+    hfov = scene.camera.hfov_deg
+    vis: set[str] = set()
+    for t in samples:
+        cam = geometry.interp_camera(scene, t)
+        for o in scene.objects:
+            if geometry.in_view(cam, (o.center[0], o.center[1]), hfov):
+                vis.add(o.id)
+    return vis
+
+
+def _camera_angle_shift_notes(
+    scene: SceneV1, scene_orig: SceneV1 | None, dur: float
+) -> tuple[list[str], bool]:
+    """Detect large camera angle shifts (e.g. Side 90° / Reverse 180°) vs scene_orig and list
+    original background objects that are now BEHIND THE CAMERA so Omni rotates the room instead of
+    just moving the actor in front of the old background."""
+    if scene_orig is None or dur <= 0:
+        return [], False
+    samples = [dur * i / 8 for i in range(9)]
+    diffs = sorted(
+        abs(
+            geometry.wrap180(
+                geometry.interp_camera(scene, t)[2]
+                - geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))[2]
+            )
+        )
+        for t in samples
+    )
+    med_diff = diffs[len(diffs) // 2]
+    if med_diff < 70.0:
+        return [], False
+    vis_ids = _visible_object_ids(scene, dur)
+    hidden = [o.visual_description for o in scene.objects if o.id not in vis_ids]
+    kind = "180° REVERSE ANGLE" if med_diff >= 135.0 else f"NEW {med_diff:.0f}° ANGLE"
+    msg = (
+        f"{kind}: Camera moved ~{med_diff:.0f}° to a new side of the room. Rotate the ENTIRE room "
+        "background — never reuse the original background or just reposition the person."
+    )
+    if hidden:
+        msg += f" BEHIND CAMERA (DO NOT DRAW): {'; '.join(hidden)}."
+    if med_diff >= 110.0:
+        msg += (
+            " FROM FRAME 0 (00:00.0), props already face the person (only the dark outer back lid of an "
+            "open laptop faces the camera — NEVER start with the green screen facing camera or flip it!)."
+        )
+    return [msg], True
+
+
+def _viewpoint_notes(
+    scene: SceneV1, dur: float, time_scale: float = 1.0, scene_orig: SceneV1 | None = None
+) -> tuple[list[str], bool]:
+    """Explicitly state whether the camera sees each actor's front, back, or side — ALWAYS matching
+    the 2D map & 3D blockout orientation (`facing_deg`) so text never contradicts the blockout."""
+    if not scene.actors or dur <= 0:
+        return [], False
+    ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
+    samples = [dur * i / 8 for i in range(9)]
+    notes: list[str] = []
+    has_back = False
+    cam_shifted = False
+    if scene_orig is not None:
+        diffs = [
+            abs(
+                geometry.wrap180(
+                    geometry.interp_camera(scene, t)[2]
+                    - geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))[2]
+                )
+            )
+            for t in samples
+        ]
+        cam_shifted = max(diffs) >= 70.0
+    for a in scene.actors:
+        runs: list[tuple[str, float, float]] = []
+        for t in samples:
+            cam = geometry.interp_camera(scene, t)
+            ax, ay, facing, vis = geometry.interp_actor(a, t)
+            if not vis or not geometry.in_view(cam, (ax, ay), scene.camera.hfov_deg):
+                continue
+            side = _actor_view_side(cam, ax, ay, facing)
+            if runs and runs[-1][0] == side:
+                runs[-1] = (side, runs[-1][1], t)
+            else:
+                runs.append((side, t, t))
+        for side, t0, t1 in runs:
+            span = f"{ts(t0)}–{ts(t1)}" if t1 > t0 else f"around {ts(t0)}"
+            if side == "back":
+                has_back = True
+                notes.append(f"{span}: camera behind {a.visual_description} (show back of head/shoulders)")
+            elif side == "front" and cam_shifted:
+                notes.append(f"{span}: {a.visual_description} faces camera (show face/front)")
+            elif side == "side" and t1 - t0 >= dur * 0.25:
+                notes.append(f"{span}: {a.visual_description} in side profile")
+    return notes, has_back
+
+
+def _actor_facing_changes(scene: SceneV1, scene_orig: SceneV1 | None, dur: float) -> list[str]:
+    """Note when the user intentionally rotated an actor's facing_deg relative to scene_orig."""
+    if scene_orig is None or dur <= 0:
+        return []
+    orig_by_id = {a.id: a for a in scene_orig.actors}
+    notes: list[str] = []
+    t_mid = dur * 0.5
+    cam = geometry.interp_camera(scene, t_mid)
+    for a in scene.actors:
+        oa = orig_by_id.get(a.id)
+        if oa is None:
+            continue
+        ax, ay, f_new, vis = geometry.interp_actor(a, t_mid)
+        _, _, f_old, _ = geometry.interp_actor(oa, min(t_mid, scene_orig.clip.duration_s))
+        if not vis or abs(geometry.wrap180(f_new - f_old)) < 35.0:
+            continue
+        side = _actor_view_side(cam, ax, ay, f_new)
+        label = (
+            "facing toward the camera"
+            if side == "front"
+            else "turned away with their back to the camera"
+            if side == "back"
+            else "turned in side profile"
+        )
+        notes.append(f"{a.visual_description} is intentionally {label} (following the blockout orientation)")
+    return notes
+
+
 def describe_shot(
     scene_edited: SceneV1,
     duration_s: float | None = None,
@@ -572,6 +856,7 @@ def describe_shot(
     orig_hfov: float | None = None,
     time_scale: float = 1.0,
     directed: bool = False,
+    scene_orig: SceneV1 | None = None,
 ) -> str:
     """Edited map → concrete shot description. Deterministic template from geometry (same map, same text).
 
@@ -581,8 +866,9 @@ def describe_shot(
     `polish=True` asks Hydrogen (MODEL_CHEAP) to smooth the wording without changing any fact (cached).
     """
     f = shot_facts(scene_edited, duration_s)
+    dur = f["duration_s"]
     ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
-    out_len = f["duration_s"] / time_scale
+    out_len = dur / time_scale
     lines = [f"A {out_len:g}-second shot on {f['lens']}.", f"At the start: {f['start']}."]
     fov = _fov_line(scene_edited.camera.hfov_deg, orig_hfov)
     if fov:
@@ -593,10 +879,31 @@ def describe_shot(
     lines.append(f"At the end: {f['end']}.")
     if f["actors"]:
         lines.append(f"Floor positions: {'; '.join(f['actors'])}.")
+    shift_notes, angle_shifted = _camera_angle_shift_notes(scene_edited, scene_orig, dur)
+    vp_notes, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
+    face_notes = _actor_facing_changes(scene_edited, scene_orig, dur)
+    if shift_notes:
+        lines += shift_notes
+    if vp_notes or face_notes:
+        lines.append("Actor facing:")
+        lines += vp_notes + face_notes
     if beats:
-        lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
+        if has_back or angle_shifted:
+            lines.append("Performance (enact these EXACT physical actions & timing from the new angle):")
+        else:
+            lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
         lines += _beat_lines(beats, time_scale)
-    lines.append(SHOT_RULES_DIRECTED if directed else SHOT_RULES)
+    rules = SHOT_RULES_DIRECTED if directed else SHOT_RULES
+    if scene_edited.actors:
+        n_act = len(scene_edited.actors)
+        rules += (
+            f" STRICT CAST COUNT: EXACTLY {n_act} {'person' if n_act == 1 else 'people'} total — ONLY "
+            "draw a person where a colored figure appears; NEVER clone or paste extra people into the "
+            "background."
+        )
+    if has_back:
+        rules += " Behind a person, show ONLY the back of their head/clothing, never a duplicate front."
+    lines.append(rules)
     text = "\n".join(lines)
     return _polish(text) if polish else text
 
@@ -627,6 +934,9 @@ def edit_prompt(
     orig_hfov: float | None = None,
     time_scale: float = 1.0,
     directed: bool = False,
+    scene_orig: SceneV1 | None = None,
+    reproject_mode: bool = False,
+    novel_view_brief: str = "",
 ) -> str:
     """Prompt for Omni `edit`: the blockout gives ONLY the camera + positions.
 
@@ -634,27 +944,60 @@ def edit_prompt(
     `directed=True` (S14): the director's PERFORMANCE / REQUESTED CHANGES sections (appended by
     `direct.compose`) say what the people do, so this base does not insist the acting is unchanged.
     """
+    dur = duration_s or scene_edited.clip.duration_s
+    _, angle_shifted = _camera_angle_shift_notes(scene_edited, scene_orig, dur)
+    _, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
+    vis_obj_ids = _visible_object_ids(scene_edited, dur) if angle_shifted else None
+    objs_for_legend = (
+        [o for o in scene_edited.objects if o.id in vis_obj_ids] or list(scene_edited.objects)
+        if vis_obj_ids is not None
+        else list(scene_edited.objects)
+    )
     actor_ids = {a.id for a in scene_edited.actors}
     legend = [
         f"the {color_name(colors.get(e.id, e.color))} {'figure' if e.id in actor_ids else 'box'}"
         f" is {e.visual_description}"
-        for e in [*scene_edited.actors, *scene_edited.objects]
+        for e in [*scene_edited.actors, *objs_for_legend]
     ]
     only = "Change ONLY the camera position, angle, point of view and field of view."
     if directed:
         keep, only = "What the people do is described in the PERFORMANCE section below.", ""
+    elif beats and (has_back or angle_shifted):
+        keep = (
+            "Enact ALL physical performance beats below at exact timing from the NEW camera angle; "
+            "rotate the room background to match."
+        )
     elif beats:
         keep = (
             "The people must perform exactly as in the original clip (performance beats below): the same "
             "actions, gestures, expressions, head turns and timing."
         )
     else:
-        keep = "The people behave exactly as in the reference images; do not invent new actions."
+        keep = (
+            "Keep the room and the people's visual identities and outfits consistent with the reference "
+            "images, while letting them naturally be viewed from any new angle (including from behind) "
+            "to match the blockout video."
+        )
+    if reproject_mode:
+        nv = f"\nNOVEL-VIEW ANALYSIS: {novel_view_brief.strip()}" if novel_view_brief.strip() else ""
+        header = (
+            "Re-render this 3D-reprojected novel-view video into photorealistic footage matching the "
+            "reference images. Follow EVERY camera angle, body pose, arm swing, fist strike, hinged prop "
+            "motion, and timing frame-for-frame; inpaint any gaps as real room surfaces. "
+            f"Previs legend: {'; '.join(legend)}. {keep} {only}".rstrip()
+            + nv
+        )
+    else:
+        header = (
+            "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
+            "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and "
+            "where people and things are; they do NOT show the performance beyond the animated arm/fist "
+            f"motion. In the previs: {'; '.join(legend)}. "
+            f"Keep the camera motion, timing, framing, and arm/fist movements EXACTLY as in the input video "
+            f"(dark hair side = back of head, dark visor side = front face). {keep} {only}".rstrip()
+        )
     return (
-        "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
-        "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and where "
-        f"people and things are; they do NOT show the performance. In the previs: {'; '.join(legend)}. "
-        f"Keep the camera motion, timing and framing EXACTLY as in the input video. {keep} {only}".rstrip()
+        header
         + "\n"
         + describe_shot(
             scene_edited,
@@ -663,6 +1006,7 @@ def edit_prompt(
             orig_hfov=orig_hfov,
             time_scale=time_scale,
             directed=directed,
+            scene_orig=scene_orig,
         )
     )
 
@@ -682,17 +1026,23 @@ class _Beats(BaseModel):
 
 
 PERFORMANCE_PROMPT = """You are watching one continuous film shot, {dur:.1f} seconds long.
-List what the people do in it, in time order, as short beats a director could re-stage exactly from
-another camera angle.
+List what the people do in it, in time order, as vivid, physically exact beats so a video generator can
+re-enact the EXACT same body performance from a completely different camera angle.
 
 Name people and things with these exact descriptions where they apply:
 {names}
 
 Rules:
-- 3 to {max_beats} beats. Each beat: t0 and t1 in seconds from the start, who, and what they do.
-- Describe actions, gestures, head turns, expressions, who is speaking (no dialogue text), and visible
-  events (an object moves, a door opens). Only what is visible. Never describe the camera or framing.
-- Keep each action short and concrete, e.g. "raises her robotic arm toward him" or "turns his head left".
+- 4 to {max_beats} beats. Each beat: t0 and t1 in seconds from the start, who, and what they do.
+- Describe EXACT body mechanics, limb/arm/hand motion, wind-up, force/intensity, speed, facial emotion,
+  and physical impact on objects — NOT vague summaries.
+  Example: instead of "closes or flattens the laptop", write "raises his right arm high in anger and
+  violently punches straight down with a clenched fist directly onto the open laptop, smashing it hard".
+- Break fast peak actions (like a punch, throw, grab, jump, or sudden turn) into their own short beat
+  with exact timestamps (e.g. wind-up + impact).
+- NEVER use camera-relative words like "foreground", "background", "left of frame", "right of frame", or
+  "toward/away from camera" — describe motion relative to the person's own body and physical objects
+  (e.g. "his right fist", "steps back from the counter", "turns away from the laptop").
 """
 
 
@@ -722,7 +1072,7 @@ def performance_beats(
             contents=[
                 types.Part(
                     file_data=types.FileData(file_uri=uri, mime_type="video/mp4"),
-                    video_metadata=types.VideoMetadata(fps=cfg.FPS),
+                    video_metadata=types.VideoMetadata(fps=max(cfg.FPS, 4)),
                 ),
                 prompt,
             ],
@@ -735,7 +1085,7 @@ def performance_beats(
         return json.loads(resp.text or "{}")
 
     try:
-        data = cached([ingest.sha256_file(clip), model, prompt, "beats.v1"], call, kind="performance")
+        data = cached([ingest.sha256_file(clip), model, prompt, "beats.v2"], call, kind="performance")
         beats = _Beats.model_validate(data).beats
     except Exception as e:  # never block a re-shoot on this: fall back to "behave as in the references"
         log.warning("performance beats unavailable for %s (%s: %s)", clip.name, type(e).__name__, e)
@@ -753,8 +1103,16 @@ def performance_beats(
 # --------------------------------------------------------------------------- reference images + label
 
 
-def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: int = MAX_REFS) -> list[Path]:
-    """≤ 6 refs: 3 keyframes from the ORIGINAL clip + crops around up to 3 entities (actors first).
+def reference_images(
+    clip: Path,
+    scene_orig: SceneV1,
+    out_dir: Path,
+    max_refs: int = MAX_REFS,
+    scene_edited: SceneV1 | None = None,
+    include_crops: bool = True,
+) -> list[Path]:
+    """≤ 6 refs: keyframes from the ORIGINAL clip + crops around entities (actors first, then objects
+    visible in `scene_edited` when provided).
 
     Crops are bounding-box guesses from geometry: a vertical strip centred on the entity's screen_x at a
     time when it is clearly in frame.
@@ -765,14 +1123,42 @@ def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: i
     info = ingest.probe(clip, check_length=False)
     dur = info.duration_s
     last = dur - 1.2 / info.fps
-    keys = [ingest.frame_at(clip, min(f * dur, last), out_dir / "frames") for f in (0.1, 0.5, 0.9)]
+    # Multi-actor scenes: 1 full frame + tight crop per actor (avoids Omni cloning people into the
+    # background on orbits). Single/zero-actor scenes: 2 keyframes + actor/object crops (≥ 3 refs total).
+    fracs = (0.5,) if len(scene_orig.actors) >= 2 else (0.2, 0.8)
+    keys = [ingest.frame_at(clip, min(f * dur, last), out_dir / "frames") for f in fracs]
     refs = list(keys)
     hfov = scene_orig.camera.hfov_deg
     span = min(dur, scene_orig.clip.duration_s)
     actor_ids = {a.id for a in scene_orig.actors}
-    for e in [*scene_orig.actors, *scene_orig.objects]:
+    objs = list(scene_orig.objects)
+    vis_obj_ids: set[str] | None = None
+    is_reverse_cam = False
+    if scene_edited is not None:
+        vis_obj_ids = _visible_object_ids(scene_edited, scene_edited.clip.duration_s)
+        objs.sort(key=lambda o: 0 if o.id in vis_obj_ids else 1)
+        _, is_reverse_cam = _camera_angle_shift_notes(
+            scene_edited, scene_orig, scene_edited.clip.duration_s
+        )
+    entities_for_crops = (
+        list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *objs]
+    )
+    if not include_crops:
+        return refs[:max_refs]
+    for e in entities_for_crops:
         if len(refs) >= max_refs:
             break
+        if vis_obj_ids is not None and e.id not in actor_ids and e.id not in vis_obj_ids and len(refs) >= 3:
+            continue  # don't feed crops of background objects that are behind the edited camera
+        if (
+            is_reverse_cam
+            and e.id not in actor_ids
+            and any(
+                k in f"{e.type} {e.visual_description}".lower() for k in ("laptop", "screen", "monitor")
+            )
+            and len(refs) >= 3
+        ):
+            continue  # avoid blasting Omni with a front-facing green-screen crop on a 180° reverse shot!
         for f in (0.5, 0.3, 0.7, 0.1, 0.9):
             t = f * span
             cam = geometry.interp_camera(scene_orig, t)
@@ -784,8 +1170,24 @@ def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: i
             if vis and 0.12 < sx < 0.88:
                 frame = Image.open(ingest.frame_at(clip, min(t * dur / span, last), out_dir / "frames"))
                 w, h = frame.size
-                cx, half = int(sx * w), int(0.2 * w)
-                crop = frame.crop((max(0, cx - half), 0, min(w, cx + half), h)).convert("RGB")
+                left_f, right_f = max(0.0, sx - 0.26), min(1.0, sx + 0.26)
+                if e.id in actor_ids and len(scene_orig.actors) >= 2:
+                    # Generous crop for full face + outfit, clamped before midpoint to neighboring actors
+                    for oa in scene_orig.actors:
+                        if oa.id == e.id:
+                            continue
+                        ox, oy, _, ovis = geometry.interp_actor(oa, t)
+                        if not ovis:
+                            continue
+                        osx = geometry.screen_x(cam, (ox, oy), hfov)
+                        mid = 0.5 * (sx + osx)
+                        if osx > sx:
+                            right_f = min(right_f, max(sx + 0.12, mid - 0.02))
+                        else:
+                            left_f = max(left_f, min(sx - 0.12, mid + 0.02))
+                else:
+                    left_f, right_f = max(0.0, sx - 0.16), min(1.0, sx + 0.16)
+                crop = frame.crop((int(left_f * w), 0, int(right_f * w), h)).convert("RGB")
                 path = out_dir / f"crop_{e.id}.jpg"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 crop.save(path, quality=92)
@@ -855,6 +1257,10 @@ def reshoot(
     polish: bool = False,
     take: int = 0,
     direction: tuple[Any, Any] | None = None,
+    action_fix: str = "",
+    guide_override: Path | None = None,
+    novel_view_brief: str = "",
+    minimal_refs: bool = False,
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
@@ -863,19 +1269,20 @@ def reshoot(
     (`time_scale` in reshoot.json).
     The people keep their original performance: `performance_beats` (cached) goes into the prompt.
     mode="blockout" (default): map-exact grey-box guide + refs → Omni `edit` (motion comes from the map).
+    mode="reproject": hybrid 3D RGB-D point-cloud + real 3D MediaPipe pose guide + novel-view analysis.
     mode="text": refs + the geometry-derived description → Omni image/reference→video (fallback).
     `take` > 0 asks for a different sample of the same request (used by `reshoot_best`).
     `direction` = (SceneBrief, Direction) from S14 `direct.prepare`: the geometric prompt is kept verbatim and
     the director's performance notes + must-keep list are appended (S14, Akash; opt-in).
     Artifacts go to `<out stem>_work/` (refs, blockout.mp4, raw.mp4 = unlabelled, reshoot.json).
     """
-    if mode not in ("blockout", "text"):
-        raise ValueError(f"mode must be 'blockout' or 'text', got {mode!r}")
+    if mode not in ("blockout", "reproject", "text"):
+        raise ValueError(f"mode must be 'blockout', 'reproject', or 'text', got {mode!r}")
     work = work_dir_for(out)
     work.mkdir(parents=True, exist_ok=True)
     full = scene_edited.clip.duration_s
     want = full if duration is None else min(full, _seconds(duration))
-    if mode == "blockout":
+    if mode in ("blockout", "reproject"):
         out_len = min(want, OMNI_EDIT_MAX_S)
     else:
         out_len = float(max(TEXT_MIN_S, min(TEXT_MAX_S, round(want))))
@@ -884,36 +1291,84 @@ def reshoot(
         log.warning(
             "re-shoot: %.1f s shot played %.2fx faster to fit Omni's %.0f s", want, time_scale, out_len
         )
-    refs = reference_images(Path(clip), scene_orig, work / "refs", max_refs=MAX_REFS)
+    refs = reference_images(
+        Path(clip),
+        scene_orig,
+        work / "refs",
+        max_refs=MAX_REFS,
+        scene_edited=scene_edited,
+        include_crops=not minimal_refs,
+    )
     ref_bytes = [r.read_bytes() for r in refs]
     directed = direction is not None
     beats = [] if directed else performance_beats(Path(clip), scene_orig)  # S14 director covers it
     orig_hfov = scene_orig.camera.hfov_deg
+    fix_line = f"\nCRITICAL FRAME-BY-FRAME ACTION FIX: {action_fix.strip()}" if action_fix.strip() else ""
     suffix = f"\n(Alternative take {take + 1}.)" if take else ""
     raw = work / "raw.mp4"
-    if mode == "blockout":
+    effective_mode = mode
+    if mode == "reproject":
+        from godshot import reproject
+
+        colors = blockout_palette(scene_edited)
+        if guide_override is not None and Path(guide_override).exists():
+            guide = Path(guide_override)
+            nv_brief = novel_view_brief
+        elif reproject.available():
+            try:
+                guide = reproject.render_reprojected_guide(
+                    Path(clip), scene_orig, scene_edited, work / "reprojected.mp4",
+                    t1=want, colors=colors, time_scale=time_scale, beats=beats,
+                )  # fmt: skip
+                nv_brief = novel_view_brief or reproject.analyze_novel_view(
+                    Path(clip), guide, work / "novel_view", beats=beats
+                )
+            except Exception as e:
+                log.warning("3D reprojection failed (%s: %s); falling back to blockout", type(e).__name__, e)
+                effective_mode = "blockout"
+                guide = render_blockout(
+                    scene_edited, work / "blockout.mp4", t1=want, colors=colors,
+                    time_scale=time_scale, beats=beats,
+                )  # fmt: skip
+                nv_brief = ""
+        else:
+            log.warning("reproject optional deps not installed; falling back to blockout")
+            effective_mode = "blockout"
+            guide = render_blockout(
+                scene_edited, work / "blockout.mp4", t1=want, colors=colors,
+                time_scale=time_scale, beats=beats,
+            )  # fmt: skip
+            nv_brief = ""
+        base = edit_prompt(
+            scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
+            directed=directed, scene_orig=scene_orig,
+            reproject_mode=(effective_mode == "reproject"), novel_view_brief=nv_brief,
+        )  # fmt: skip
+        prompt = _directed(base, direction) + fix_line + suffix
+        generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
+    elif mode == "blockout":
         colors = blockout_palette(scene_edited)
         guide = render_blockout(
-            scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale
+            scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale, beats=beats
         )
         base = edit_prompt(
             scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
-            directed=directed,
+            directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
-        prompt = _directed(base, direction) + suffix
+        prompt = _directed(base, direction) + fix_line + suffix
         generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
     else:
         base = describe_shot(
             scene_edited, want, polish=polish, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
-            directed=directed,
+            directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
-        prompt = _directed(base, direction) + suffix
+        prompt = _directed(base, direction) + fix_line + suffix
         generate_video(ref_bytes, prompt, raw, duration=f"{round(out_len):d}s", resolution=resolution)
     out = burn_label(raw, Path(out))
     meta = {
         "label": AI_LABEL,
         "model": load_config().MODEL_RESHOOT,
-        "mode": mode,
+        "mode": effective_mode,
         "take": take,
         "directed": directed,
         "source_duration_s": full,
@@ -952,6 +1407,8 @@ def reshoot_best(
     w_preserve: float = 0.4,
     request: str = "",
     critic_rounds: int = 0,
+    verify_actions: bool = False,
+    action_retries: int = 1,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Generate `n` takes in parallel, score each with `conformance` vs the edited map, keep the best.
@@ -985,10 +1442,39 @@ def reshoot_best(
         else:
             brief = direct_mod.analyze_scene(clip, scene_orig)
 
-    def make(k: int, take_pack: Any) -> Path:
+    action_beats = performance_beats(Path(clip), scene_orig) if verify_actions else None
+    shared_extra: dict[str, Any] = {}
+    if kwargs.get("mode") == "reproject" and "guide_override" not in kwargs:
+        from godshot import reproject
+
+        if reproject.available():
+            try:
+                cap = kwargs.get("duration")
+                full = scene_edited.clip.duration_s
+                want = full if cap is None else min(full, _seconds(cap))
+                out_len = min(want, OMNI_EDIT_MAX_S)
+                ts = want / out_len
+                b = action_beats if action_beats is not None else performance_beats(Path(clip), scene_orig)
+                colors = blockout_palette(scene_edited)
+                guide_path = reproject.render_reprojected_guide(
+                    Path(clip), scene_orig, scene_edited, out_dir / "reprojected_guide.mp4",
+                    t1=want, colors=colors, time_scale=ts, beats=b,
+                )  # fmt: skip
+                nv_brief = reproject.analyze_novel_view(
+                    Path(clip), guide_path, out_dir / "novel_view", beats=b
+                )
+                shared_extra = {"guide_override": guide_path, "novel_view_brief": nv_brief}
+            except Exception as e:
+                log.warning("shared 3D reprojection failed (%s: %s); falling back to blockout",
+                            type(e).__name__, e)
+
+    def make(k: int, take_pack: Any, action_fix: str = "") -> Path:
         out = out_dir / f"take_{k + 1}.mp4"
+        extra = {**shared_extra, **({"action_fix": action_fix} if action_fix else {})}
         try:
-            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+            return reshoot(
+                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
+            )
         except OmniError as e:  # generic INVALID_ARGUMENT, more often on long prompts: retry once, compact
             log.warning("take %d failed (%s); retrying once with a compact prompt", k + 1, e)
             if take_pack is not None:
@@ -997,7 +1483,11 @@ def reshoot_best(
                 from godshot import direct as direct_mod  # S14
 
                 take_pack = replace(take_pack, budget=direct_mod.COMPACT_PROMPT_CHARS)
-            return reshoot(clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **kwargs)
+            retry_extra = {**extra, "novel_view_brief": "", "minimal_refs": True}
+            retry_kw = {**kwargs, "resolution": "360p"}
+            return reshoot(
+                clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **retry_extra, **retry_kw
+            )
 
     def score(k: int, path: Path) -> dict[str, Any]:
         # score the UNLABELLED video (the badge could confuse the verifier)
@@ -1005,6 +1495,17 @@ def reshoot_best(
         conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
         row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
                "usable": conf["usable"], "conformance": conf}  # fmt: skip
+        if verify_actions:
+            act = compare_action_frames(
+                clip, raw, beats=action_beats, work_dir=work_dir_for(path) / "action_compare"
+            )
+            if act is not None:
+                row |= {
+                    "action_score": act["action_score"],
+                    "action_frames": act["frames"],
+                    "action_correction": act["correction"],
+                    "combined": round(0.55 * conf["score"] + 0.45 * act["action_score"], 3),
+                }
         if brief is not None:
             from godshot import direct as direct_mod  # S14
 
@@ -1027,6 +1528,22 @@ def reshoot_best(
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
         takes = list(pool.map(lambda k: score(k, make(k, pack)), range(n)))
+
+    if verify_actions and action_retries > 0:
+        for _r in range(action_retries):
+            best_so_far = max(takes, key=rank)
+            fix_text = best_so_far.get("action_correction", "")
+            if best_so_far.get("action_score", 1.0) >= 0.82 or not fix_text:
+                break
+            k = len(takes)
+            log.info(
+                "frame-by-frame action score %.2f < 0.82 on take %d; generating corrective take %d: %s",
+                best_so_far["action_score"],
+                best_so_far["take"],
+                k + 1,
+                fix_text,
+            )
+            takes.append(score(k, make(k, pack, action_fix=fix_text)))
 
     critiques = []
     if pack is not None and critic_rounds > 0:
@@ -1051,13 +1568,13 @@ def reshoot_best(
             if crit.verdict == "accept" or not crit.corrections.strip():
                 break
             corrections.append(crit.corrections.strip())
-            k = n + r
+            k = len(takes)
             takes.append(score(k, make(k, replace(pack, corrections=list(corrections)))))
 
     best = max(takes, key=rank)
     final = out_dir / "reshoot_best.mp4"
     shutil.copyfile(best["video"], final)
-    hidden = ("conformance", "preservation_items", "fulfilment_items", "_pres", "_ful")
+    hidden = ("conformance", "preservation_items", "fulfilment_items", "action_frames", "_pres", "_ful")
     summary = {
         "label": AI_LABEL,
         "video": str(final),
@@ -1068,6 +1585,13 @@ def reshoot_best(
         "takes": [{k: v for k, v in r.items() if k not in hidden} for r in takes],
         "checks": best["conformance"]["checks"],
     }
+    if "action_score" in best:
+        summary |= {
+            "action_score": best["action_score"],
+            "action_frames": best.get("action_frames", []),
+            "action_correction": best.get("action_correction", ""),
+            "combined": best.get("combined", best["score"]),
+        }
     if brief is not None:  # S14
         summary |= {"directed": direct, "request": request, "preservation": best["preservation"],
                     "kept": best["kept"], "fulfilment": best.get("fulfilment"), "done": best.get("done"),
@@ -1154,3 +1678,171 @@ def conformance(generated_clip: Path, scene_edited: SceneV1, work_dir: Path | No
         json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
     )
     return result
+
+
+# --------------------------------------------------------------------------- frame-by-frame action comparison
+
+
+class ActionFrameCheck(BaseModel):
+    t_label: str
+    orig_action: str
+    gen_action: str
+    match: bool
+    fix: str = ""
+
+
+class ActionComparison(BaseModel):
+    action_score: float = Field(ge=0.0, le=1.0)
+    frames: list[ActionFrameCheck] = Field(default_factory=list)
+    correction: str = ""
+
+
+ACTION_COMPARE_PROMPT = """Top row = ORIGINAL video frames at timestamps {labels}.
+Bottom row = AI RE-SHOOT of the same scene filmed from a DIFFERENT camera angle at the exact same timestamps.
+
+Compare frame-by-frame (IGNORING the intentional change in camera angle or framing):
+1. Physical action & prop reactions: is each person doing the same action/pose and do props react properly
+   (NEVER starting a prop backwards at 00:00 and randomly flipping/turning it around mid-shot)?
+2. Wardrobe & identity separation: does each person keep ONLY their own face, hair, clothing, pants/leggings,
+   and props (NEVER swapping or copying pants/leggings, robotic arm, hair, or face onto the wrong person)?
+
+For each timestamp column, report:
+- orig_action: what the person(s) + key props are physically doing in the TOP frame
+- gen_action: what the person(s) + key props are doing in the BOTTOM frame (note any outfit/identity swap)
+- match: true ONLY if actions/props match AND no person wears another person's clothing/props or face
+- fix: if match is false, a brief concrete fix (e.g. "give the man dark jeans instead of pink/black leggings")
+
+Then compute:
+- action_score: fraction of matched frames (0.0 to 1.0)
+- correction: 1–2 concrete sentences telling the video generator EXACTLY what physical action, prop, or
+  wardrobe/identity bug to fix (with timestamps) on the next take. Leave empty string if action_score >= 0.85.
+"""
+
+
+def _pick_action_times(dur: float, beats: Sequence[dict[str, Any]] | None = None, k: int = 6) -> list[float]:
+    """Pick `k` matched timestamps across [0, dur], always checking frame 0 (0.2s) + peak action & impact."""
+    base = [0.2, dur * 0.28, dur * 0.48, dur * 0.68, dur * 0.86]
+    extra: list[float] = []
+    if beats:
+        # Highlight shortest / highest-intensity action beats (mid-swing + immediate aftermath)
+        ranked = sorted(
+            beats,
+            key=lambda b: (
+                0 if any(w in str(b.get("action", "")).lower() for w in (
+                    "punch", "hit", "slam", "smash", "strike", "fist", "throw", "grab", "kick", "jump",
+                )) else 1,
+                max(0.05, float(b.get("t1", 0)) - float(b.get("t0", 0))),
+            ),
+        )
+        top = ranked[0]
+        t0, t1 = float(top.get("t0", 0.0)), float(top.get("t1", 0.0))
+        extra.extend([t0 + 0.55 * (t1 - t0), min(dur * 0.95, t1 + 0.15)])
+    pts = sorted(max(0.1, min(dur - 0.1, t)) for t in [*base, *extra])
+    # Deduplicate points that are too close, prioritizing `extra` peak times
+    merged: list[float] = []
+    for t in pts:
+        if not merged or abs(t - merged[-1]) >= max(0.35, dur / (k * 3)):
+            merged.append(t)
+        elif any(abs(t - e) < 0.05 for e in extra):
+            merged[-1] = t
+    while len(merged) > k:
+        # Drop the least-unique non-peak timestamp
+        idx = min(
+            range(len(merged)),
+            key=lambda i: (
+                1 if any(abs(merged[i] - e) < 0.15 for e in extra) else 0,
+                min(
+                    merged[i] - merged[i - 1] if i > 0 else 999.0,
+                    merged[i + 1] - merged[i] if i + 1 < len(merged) else 999.0,
+                ),
+            ),
+        )
+        merged.pop(idx)
+    return merged
+
+
+def compare_action_frames(
+    orig_clip: Path,
+    gen_clip: Path,
+    beats: Sequence[dict[str, Any]] | None = None,
+    work_dir: Path | None = None,
+    model: str | None = None,
+) -> dict[str, Any] | None:
+    """Compare original vs generated video frame-by-frame on a Before/After contact sheet using Gemini.
+
+    Scores whether the actor performs the SAME physical actions & prop interactions (ignoring the
+    camera angle change) and returns a targeted correction string if anything is missed.
+    """
+    from google.genai import types
+
+    from godshot import ingest
+
+    orig_clip, gen_clip = Path(orig_clip), Path(gen_clip)
+    raw = work_dir_for(gen_clip) / "raw.mp4"
+    if raw.exists():
+        gen_clip = raw
+    try:
+        o_info = ingest.probe(orig_clip, check_length=False)
+        g_info = ingest.probe(gen_clip, check_length=False)
+    except Exception as e:
+        log.warning("action compare probe failed: %s", e)
+        return None
+    out_dir = Path(work_dir) if work_dir else gen_clip.parent / "action_compare"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    times = _pick_action_times(o_info.duration_s, beats=beats, k=6)
+    o_last = o_info.duration_s - 1.2 / o_info.fps
+    g_last = g_info.duration_s - 1.2 / g_info.fps
+    scale = g_info.duration_s / max(o_info.duration_s, 0.1)
+
+    tw, th, hdr = 320, 180, 22
+    sheet = Image.new("RGB", (tw * len(times), th * 2 + hdr), (18, 20, 24))
+    draw = ImageDraw.Draw(sheet)
+    labels: list[str] = []
+    for i, t in enumerate(times):
+        lbl = mmss(t)[:7]
+        labels.append(lbl)
+        of = Image.open(ingest.frame_at(orig_clip, min(t, o_last), out_dir / "orig")).resize((tw, th))
+        gf = Image.open(ingest.frame_at(gen_clip, min(t * scale, g_last), out_dir / "gen")).resize((tw, th))
+        sheet.paste(of.convert("RGB"), (i * tw, hdr))
+        sheet.paste(gf.convert("RGB"), (i * tw, hdr + th))
+        draw.text((i * tw + 8, 4), f"{lbl}  (top=ORIG, bot=NEW)", fill=(230, 234, 240))
+    sheet_path = out_dir / "action_compare.jpg"
+    sheet.save(sheet_path, quality=88)
+
+    cfg = load_config()
+    model = model or cfg.MODEL_CHEAP
+    prompt = ACTION_COMPARE_PROMPT.format(labels=", ".join(labels))
+
+    def call() -> dict[str, Any]:
+        resp = get_client().models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=sheet_path.read_bytes(), mime_type="image/jpeg"),
+                prompt,
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=ActionComparison.model_json_schema(),
+                thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+            ),
+        )
+        return json.loads(resp.text or "{}")
+
+    try:
+        data = cached(
+            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v3"],
+            call,
+            kind="action_compare",
+        )
+        parsed = ActionComparison.model_validate(data)
+    except Exception as e:
+        log.warning("action compare unavailable (%s: %s)", type(e).__name__, e)
+        return None
+    res = {
+        "action_score": round(parsed.action_score, 3),
+        "frames": [f.model_dump() for f in parsed.frames],
+        "correction": parsed.correction.strip(),
+        "sheet": str(sheet_path),
+    }
+    (out_dir / "action_compare.json").write_text(json.dumps(res, indent=2) + "\n", encoding="utf-8")
+    return res
