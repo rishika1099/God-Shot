@@ -1160,8 +1160,24 @@ def reference_images(
             if vis and 0.12 < sx < 0.88:
                 frame = Image.open(ingest.frame_at(clip, min(t * dur / span, last), out_dir / "frames"))
                 w, h = frame.size
-                cx, half = int(sx * w), int(0.15 * w)
-                crop = frame.crop((max(0, cx - half), 0, min(w, cx + half), h)).convert("RGB")
+                left_f, right_f = max(0.0, sx - 0.26), min(1.0, sx + 0.26)
+                if e.id in actor_ids and len(scene_orig.actors) >= 2:
+                    # Generous crop for full face + outfit, clamped before midpoint to neighboring actors
+                    for oa in scene_orig.actors:
+                        if oa.id == e.id:
+                            continue
+                        ox, oy, _, ovis = geometry.interp_actor(oa, t)
+                        if not ovis:
+                            continue
+                        osx = geometry.screen_x(cam, (ox, oy), hfov)
+                        mid = 0.5 * (sx + osx)
+                        if osx > sx:
+                            right_f = min(right_f, max(sx + 0.12, mid - 0.02))
+                        else:
+                            left_f = max(left_f, min(sx - 0.12, mid + 0.02))
+                else:
+                    left_f, right_f = max(0.0, sx - 0.16), min(1.0, sx + 0.16)
+                crop = frame.crop((int(left_f * w), 0, int(right_f * w), h)).convert("RGB")
                 path = out_dir / f"crop_{e.id}.jpg"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 crop.save(path, quality=92)
@@ -1599,19 +1615,21 @@ class ActionComparison(BaseModel):
 ACTION_COMPARE_PROMPT = """Top row = ORIGINAL video frames at timestamps {labels}.
 Bottom row = AI RE-SHOOT of the same scene filmed from a DIFFERENT camera angle at the exact same timestamps.
 
-Compare frame-by-frame what the person is physically DOING and how props/objects react, IGNORING the
-intentional change in camera angle or framing.
+Compare frame-by-frame (IGNORING the intentional change in camera angle or framing):
+1. Physical action & prop reactions: is each person doing the same action/pose and do props react properly?
+2. Wardrobe & identity separation: does each person keep ONLY their own face, hair, clothing, pants/leggings,
+   and props (NEVER swapping or copying pants/leggings, robotic arm, hair, or face onto the wrong person)?
 
 For each timestamp column, report:
-- orig_action: what the person + key props are physically doing in the TOP frame
-- gen_action: what the person + key props are physically doing in the BOTTOM frame
-- match: true ONLY if the person performs the same physical action/pose AND key props react/orient properly
-- fix: if match is false, a brief concrete fix (e.g. "punch straight down with fist instead of closing lid")
+- orig_action: what the person(s) + key props are physically doing in the TOP frame
+- gen_action: what the person(s) + key props are doing in the BOTTOM frame (note any outfit/identity swap)
+- match: true ONLY if actions/props match AND no person wears another person's clothing/props or face
+- fix: if match is false, a brief concrete fix (e.g. "give the man dark jeans instead of pink/black leggings")
 
 Then compute:
 - action_score: fraction of matched frames (0.0 to 1.0)
-- correction: 1–2 concrete sentences telling the video generator EXACTLY what physical action or prop
-  behavior to fix (with timestamps) on the next take. Leave empty string if action_score >= 0.85.
+- correction: 1–2 concrete sentences telling the video generator EXACTLY what physical action, prop, or
+  wardrobe/identity bug to fix (with timestamps) on the next take. Leave empty string if action_score >= 0.85.
 """
 
 
@@ -1726,7 +1744,7 @@ def compare_action_frames(
 
     try:
         data = cached(
-            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v1"],
+            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v2"],
             call,
             kind="action_compare",
         )
