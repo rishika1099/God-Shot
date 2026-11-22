@@ -257,8 +257,103 @@ def _box_faces(cx: float, cy: float, w: float, d: float, rot_deg: float, z0: flo
     return faces
 
 
+def _limb_faces(
+    p0: tuple[float, float, float], p1: tuple[float, float, float], half: float = 0.055
+) -> list[list[tuple[float, float, float]]]:
+    """3D prism faces connecting two 3D points (e.g. shoulder → elbow or elbow → fist)."""
+    dx, dy, dz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+    ln = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if ln < 1e-4:
+        return []
+    ax, ay, az = dx / ln, dy / ln, dz / ln
+    ref = (0.0, 0.0, 1.0) if abs(az) < 0.9 else (1.0, 0.0, 0.0)
+    ux, uy, uz = ay * ref[2] - az * ref[1], az * ref[0] - ax * ref[2], ax * ref[1] - ay * ref[0]
+    ul = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+    ux, uy, uz = ux / ul * half, uy / ul * half, uz / ul * half
+    vx, vy, vz = (ay * uz - az * uy) / half, (az * ux - ax * uz) / half, (ax * uy - ay * ux) / half
+    vx, vy, vz = vx * half, vy * half, vz * half
+
+    def ring(p: tuple[float, float, float]) -> list[tuple[float, float, float]]:
+        return [
+            (p[0] - ux - vx, p[1] - uy - vy, p[2] - uz - vz),
+            (p[0] + ux - vx, p[1] + uy - vy, p[2] + uz - vz),
+            (p[0] + ux + vx, p[1] + uy + vy, p[2] + uz + vz),
+            (p[0] - ux + vx, p[1] - uy + vy, p[2] - uz + vz),
+        ]
+
+    r0, r1 = ring(p0), ring(p1)
+    faces = [[r0[i], r0[(i + 1) % 4], r1[(i + 1) % 4], r1[i]] for i in range(4)]
+    faces.append(r1)
+    return faces
+
+
+def _lerp3(
+    a: tuple[float, float, float], b: tuple[float, float, float], f: float
+) -> tuple[float, float, float]:
+    f = max(0.0, min(1.0, f))
+    return (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f)
+
+
+def _actor_arm_pose(
+    actor_desc: str, t: float, beats: Sequence[dict[str, Any]] | None
+) -> tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+] | None:
+    """Return (r_elbow, r_hand, l_elbow, l_hand) in actor-local (right, forward, up) offsets from the
+    actor's center at shoulder height, driven by timestamped performance beats."""
+    if not beats:
+        return None
+    ad = actor_desc.lower()
+    words = {w for w in ad.split() if len(w) >= 4}
+    active: dict[str, Any] | None = None
+    for b in beats:
+        t0, t1 = float(b.get("t0", 0.0)), float(b.get("t1", 0.0))
+        if t0 - 0.15 <= t <= t1 + 0.15:
+            who = str(b.get("who", "")).lower()
+            if not words or who in ad or ad in who or any(w in who for w in words):
+                active = b
+                break
+    re, rh = (0.31, 0.04, -0.26), (0.31, 0.08, -0.52)
+    le, lh = (-0.31, 0.04, -0.26), (-0.31, 0.08, -0.52)
+    if active is None:
+        return re, rh, le, lh
+    t0, t1 = float(active.get("t0", 0.0)), float(active.get("t1", 0.0))
+    u = max(0.0, min(1.0, (t - t0) / max(0.1, t1 - t0)))
+    act = str(active.get("action", "")).lower()
+    if any(k in act for k in ("punch", "slam", "smash", "hit", "strike", "bang", "fist")):
+        le, lh = (-0.30, 0.24, -0.18), (-0.22, 0.48, -0.34)
+        up_e, up_h = (0.44, -0.08, 0.26), (0.36, -0.02, 0.62)
+        down_e, down_h = (0.28, 0.34, -0.08), (0.14, 0.64, -0.44)
+        rec_e, rec_h = (0.34, 0.26, 0.02), (0.22, 0.50, -0.28)
+        if u < 0.45:
+            f = u / 0.45
+            re, rh = _lerp3((0.32, 0.16, -0.16), up_e, f), _lerp3((0.26, 0.34, -0.28), up_h, f)
+        elif u < 0.78:
+            f = (u - 0.45) / 0.33
+            re, rh = _lerp3(up_e, down_e, f), _lerp3(up_h, down_h, f)
+        else:
+            f = (u - 0.78) / 0.22
+            re, rh = _lerp3(down_e, rec_e, f), _lerp3(down_h, rec_h, f)
+    elif any(k in act for k in ("cover", "forehead", "eyes", "face")):
+        re, rh = (0.32, 0.22, 0.04), (0.06, 0.26, 0.28)
+    elif any(k in act for k in ("recoil", "raise", "lift", "wave", "upward")):
+        re, rh = (0.38, 0.24, 0.14), (0.28, 0.36, 0.42)
+    elif any(k in act for k in ("lean", "hold", "rest", "reach", "grab", "point", "type", "laptop")):
+        re, rh = (0.30, 0.24, -0.18), (0.20, 0.48, -0.34)
+        le, lh = (-0.30, 0.24, -0.18), (-0.20, 0.48, -0.34)
+    return re, rh, le, lh
+
+
 def _blockout_frame(
-    scene: SceneV1, t: float, w: int, h: int, colors: dict[str, str] | None = None
+    scene: SceneV1,
+    t: float,
+    w: int,
+    h: int,
+    colors: dict[str, str] | None = None,
+    beats: Sequence[dict[str, Any]] | None = None,
 ) -> Image.Image:
     cam = _Cam(geometry.interp_camera(scene, t), scene.camera.hfov_deg, w, h)
     img = Image.new("RGB", (w, h), (28, 30, 34))
@@ -342,6 +437,23 @@ def _blockout_frame(
         p_l = (ax - hw * ux + fd * vx, ay - hw * uy + fd * vy)
         p_r = (ax + hw * ux + fd * vx, ay + hw * uy + fd * vy)
         add([(*p_r, z0), (*p_l, z0), (*p_l, z1), (*p_r, z1)], (36, 36, 42), (36, 36, 42))
+        # Articulated 3D arms + fists driven by timestamped performance beats (shows punches, gestures)
+        arm_pose = _actor_arm_pose(a.visual_description, t, beats)
+        if arm_pose is not None:
+            re, rh, le, lh = arm_pose
+            sz = bh - 0.12
+            for sx, e_off, h_off in ((bw * 0.52, re, rh), (-bw * 0.52, le, lh)):
+                p_sh = (ax + sx * ux, ay + sx * uy, sz)
+                p_el = (ax + e_off[0] * ux + e_off[1] * vx, ay + e_off[0] * uy + e_off[1] * vy, sz + e_off[2])
+                p_ha = (ax + h_off[0] * ux + h_off[1] * vx, ay + h_off[0] * uy + h_off[1] * vy, sz + h_off[2])
+                for f_poly in _limb_faces(p_sh, p_el, half=0.06):
+                    add(f_poly, _shade(base, 0.92))
+                for f_poly in _limb_faces(p_el, p_ha, half=0.052):
+                    add(f_poly, (220, 184, 150))
+                for f_poly in _box_faces(
+                    p_ha[0], p_ha[1], 0.13, 0.13, facing, p_ha[2] - 0.065, p_ha[2] + 0.065
+                ):
+                    add(f_poly, (236, 200, 168))
 
     # The camera is inside the room, so every wall is behind every object: walls first, then objects
     # and actors by depth (painter's algorithm, far → near).
@@ -359,6 +471,7 @@ def render_blockout(
     t1: float | None = None,
     colors: dict[str, str] | None = None,
     time_scale: float = 1.0,
+    beats: Sequence[dict[str, Any]] | None = None,
 ) -> Path:
     """Grey-box previs of `scene` filmed along its EXACT camera track (x, y, yaw, hfov), as an mp4.
 
@@ -384,7 +497,8 @@ def render_blockout(
     assert proc.stdin is not None
     try:
         for i in range(n):
-            proc.stdin.write(_blockout_frame(scene, t0 + i / fps * time_scale, w, h, colors).tobytes())
+            frame = _blockout_frame(scene, t0 + i / fps * time_scale, w, h, colors, beats=beats)
+            proc.stdin.write(frame.tobytes())
     finally:
         proc.stdin.close()
         err = proc.stderr.read().decode() if proc.stderr else ""
@@ -886,8 +1000,9 @@ def edit_prompt(
     return (
         "Re-render this grey-box previsualization as the real, photographic scene shown in the reference "
         "images. The grey boxes only give the CAMERA (position, angle, movement, field of view) and where "
-        f"people and things are; they do NOT show the performance. In the previs: {'; '.join(legend)}. "
-        f"Keep the camera motion, timing and framing EXACTLY as in the input video "
+        "people and things are; they do NOT show the performance beyond the animated arm/fist motion. "
+        f"In the previs: {'; '.join(legend)}. "
+        f"Keep the camera motion, timing, framing, and arm/fist movements EXACTLY as in the input video "
         f"(dark hair side = back of head, dark visor side = front face). {keep} {only}".rstrip()
         + "\n"
         + describe_shot(
@@ -917,17 +1032,23 @@ class _Beats(BaseModel):
 
 
 PERFORMANCE_PROMPT = """You are watching one continuous film shot, {dur:.1f} seconds long.
-List what the people do in it, in time order, as short beats a director could re-stage exactly from
-another camera angle.
+List what the people do in it, in time order, as vivid, physically exact beats so a video generator can
+re-enact the EXACT same body performance from a completely different camera angle.
 
 Name people and things with these exact descriptions where they apply:
 {names}
 
 Rules:
-- 3 to {max_beats} beats. Each beat: t0 and t1 in seconds from the start, who, and what they do.
-- Describe actions, gestures, head turns, expressions, who is speaking (no dialogue text), and visible
-  events (an object moves, a door opens). Only what is visible. Never describe the camera or framing.
-- Keep each action short and concrete, e.g. "raises her robotic arm toward him" or "turns his head left".
+- 4 to {max_beats} beats. Each beat: t0 and t1 in seconds from the start, who, and what they do.
+- Describe EXACT body mechanics, limb/arm/hand motion, wind-up, force/intensity, speed, facial emotion,
+  and physical impact on objects — NOT vague summaries.
+  Example: instead of "closes or flattens the laptop", write "raises his right arm high in anger and
+  violently punches straight down with a clenched fist directly onto the open laptop, smashing it hard".
+- Break fast peak actions (like a punch, throw, grab, jump, or sudden turn) into their own short beat
+  with exact timestamps (e.g. wind-up + impact).
+- NEVER use camera-relative words like "foreground", "background", "left of frame", "right of frame", or
+  "toward/away from camera" — describe motion relative to the person's own body and physical objects
+  (e.g. "his right fist", "steps back from the counter", "turns away from the laptop").
 """
 
 
@@ -957,7 +1078,7 @@ def performance_beats(
             contents=[
                 types.Part(
                     file_data=types.FileData(file_uri=uri, mime_type="video/mp4"),
-                    video_metadata=types.VideoMetadata(fps=cfg.FPS),
+                    video_metadata=types.VideoMetadata(fps=max(cfg.FPS, 4)),
                 ),
                 prompt,
             ],
@@ -970,7 +1091,7 @@ def performance_beats(
         return json.loads(resp.text or "{}")
 
     try:
-        data = cached([ingest.sha256_file(clip), model, prompt, "beats.v1"], call, kind="performance")
+        data = cached([ingest.sha256_file(clip), model, prompt, "beats.v2"], call, kind="performance")
         beats = _Beats.model_validate(data).beats
     except Exception as e:  # never block a re-shoot on this: fall back to "behave as in the references"
         log.warning("performance beats unavailable for %s (%s: %s)", clip.name, type(e).__name__, e)
@@ -1151,7 +1272,7 @@ def reshoot(
     if mode == "blockout":
         colors = blockout_palette(scene_edited)
         guide = render_blockout(
-            scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale
+            scene_edited, work / "blockout.mp4", t1=want, colors=colors, time_scale=time_scale, beats=beats
         )
         base = edit_prompt(
             scene_edited, colors, want, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
