@@ -1,7 +1,7 @@
 # S13: Pitch (deck, demo script, failure gallery, backup video)
 
 - **Owner:** Rishika (Akash builds the failure gallery stills; everyone rehearses)
-- **Status:** todo
+- **Status:** in progress (3:00 demo script, slide outline, Element 119 answers & Q&A prep drafted)
 - **Depends on:** S11 (numbers), S08/S12 (pre-rendered reels)
 - **Models:** none
 
@@ -34,4 +34,5 @@ A 3-minute demo that proves the claim with our own numbers, and survives bad Wi-
 - [ ] README has final numbers, credits, a team list and a "built today" note; repo is public; submission done.
 
 ## Notes / changelog
--
+- 2026-11-21 (Rishika): Drafted `assets/pitch/demo_script.md` with timed 3:00 demo script, 8-slide deck outline (all metric slots marked `[TBD]` pending locked `eval/results.md`), explicit Element 119 track answers, judge Q&A sheet, and submission checklist.
+- Remaining: fill locked numbers from `eval/results.md` after M2 (5:00 PM), add Akash's `assets/img/failure_gallery.png`, export `assets/pitch/deck.pdf`, record 3-min offline backup video (`assets/pitch/backup.mp4`), run 2 timed rehearsals under 3:00, update `README.md`.

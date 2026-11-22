@@ -17,7 +17,7 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | in progress (40 CameraBench mapped + 11 Blender clips trimmed; labeling next) |
 | S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | in progress (charts + score.py + run_all.py done; numbers need runs) |
 | S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | in progress (code done + tested; awaiting S09 wiring) |
-| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | todo |
+| S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | in progress (script & deck outline drafted) |
 | S14 | Direct: scene analyst, interpreter, director + critic agents for re-shoots | Akash | S12, S05, S03 | — | in review |
 
 ## Notes
