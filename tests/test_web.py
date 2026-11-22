@@ -195,3 +195,20 @@ def test_upload_starts_job_and_reports_pipeline_errors(
 
 def test_reshoot_without_clip_is_404(client: TestClient) -> None:
     assert client.post("/api/run/mock_001/reshoot", json={}).status_code == 404
+
+
+def test_loop_log_s06_bank_fields_map_to_pass_rate(client: TestClient, tmp_path: Path) -> None:
+    """S06 writes score_cand/bank_size; the UI needs contract pass_rate/n_checks."""
+    import json
+
+    log = [
+        {"round": 0, "bank_size": 60, "usable": 54, "score_prev": 0.85, "score_cand": 0.85, "accepted": True},
+        {"round": 1, "bank_size": 73, "usable": 67, "score_prev": 0.76, "score_cand": 1.0, "accepted": True},
+        {"round": 2, "pass_rate": 0.5, "n_checks": 10, "accepted": False},  # contract shape is kept as-is
+    ]
+    (tmp_path / "out" / "mock_001" / "loop_log.json").write_text(json.dumps(log), encoding="utf-8")
+    runs = client.get("/api/runs").json()
+    assert runs[0]["pass_rates"] == [0.85, 1.0, 0.5]
+    got = client.get("/api/run/mock_001").json()["loop_log"]
+    assert [e["n_checks"] for e in got] == [60, 73, 10]
+    assert got[1]["score_prev"] == 0.76  # original fields are preserved

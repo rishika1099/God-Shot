@@ -49,11 +49,15 @@ godshot/
   geometry.py     projection math            S03  Siva
   checks.py       scene → check.v1           S04  Rishika
   verify.py       Decisions API client       S05  Siva
-  correct.py      Argon correction + loop    S06  Rishika
+  correct.py      Argon correction           S06  Rishika
+  pipeline.py     verify/correct loop + run  S06  Rishika
   render.py       map animation              S07  Akash
   compose.py      ffmpeg reel                S08  Akash
+  edit.py         map edits + text edits     S09  Siva
   web/            FastAPI + HTML UI          S09  Siva
   reshoot.py      Omni re-shoot              S12  Prajesh
+  reproject.py    optional 3D guide          S12  Prajesh
+  direct.py       analyst/director/critic    S14  Akash
 eval/
   camerabench/    subset + mapped labels     S10  Rishika
   labels/         label.v1 JSONL             S10  Rishika

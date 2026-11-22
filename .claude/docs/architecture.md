@@ -52,3 +52,11 @@ clip ─► S01 ingest ─► S02 extract (Argon) ─► scene.json ─► S04 c
 - **M1:** one real clip runs S01→S08 end to end.
 - **M2:** eval numbers on the test split locked. Go/no-go on S12 polish.
 - **Freeze:** no new features. Pre-render demo reels.
+
+## Current additions (2026-11-22)
+- `godshot/pipeline.py` owns the shared-question-bank loop. `python -m godshot run` calls it.
+- `godshot/edit.py` applies map edits. Hydrogen translates text instructions into validated edit operations.
+- `godshot/reshoot.py` generates parallel takes and scores map conformance. The web flow also verifies action frame by frame.
+- `godshot/reproject.py` builds the optional 3D guide from depth and pose (`requirements-3d.txt`). Without it, re-shoots use the blockout guide.
+- `godshot/direct.py` (S14) adds the scene analyst, interpreter, director, and critic behind the CLI `--direct` option.
+- `python -m godshot eval` calls `eval/run_all.py`. `eval/score.py` scores scenes against human labels only.

@@ -116,15 +116,45 @@ def baseline(
 
 
 @app.command()
-def run(clip: str, o: str = typer.Option(..., "-o")) -> None:
+def run(
+    clip: str,
+    o: str = typer.Option(..., "-o", help="Output dir, e.g. out/<clip_id>"),
+    max_rounds: int | None = typer.Option(None, "--max-rounds", help="Default: GODSHOT_MAX_ROUNDS"),
+    no_reel: bool = typer.Option(False, "--no-reel", help="Skip the map and reel render."),
+) -> None:
     """Full loop + reel (S06, S07, S08)."""
-    raise NotImplementedError("S06/S07/S08")
+    from pathlib import Path
+
+    from godshot.pipeline import run as run_pipeline
+
+    clip_path = Path(clip)
+    if not clip_path.is_file():
+        typer.echo(f"clip not found: {clip_path}", err=True)
+        raise typer.Exit(2)
+    scene = run_pipeline(clip_path, Path(o), max_rounds=max_rounds, render_reel=not no_reel)
+    typer.echo(f"wrote {Path(o) / 'scene_final.json'} ({len(scene.low_confidence)} low-confidence items)")
 
 
 @app.command("eval")
-def eval_(split: str = "test", system: str = "full") -> None:
-    """Run eval over a split (S11)."""
-    raise NotImplementedError("S11")
+def eval_(
+    split: str = typer.Option("test", "--split", help="dev | test"),
+    system: str = typer.Option("full", "--system", help="baseline | full"),
+    force: bool = typer.Option(False, "--force", help="Re-run clips that already have output."),
+) -> None:
+    """Run baseline or full over a split (S11). Score it with eval/score.py."""
+    import sys
+
+    from godshot.config import REPO_ROOT
+
+    if str(REPO_ROOT) not in sys.path:  # eval/ is a repo folder, not an installed package
+        sys.path.insert(0, str(REPO_ROOT))
+    from eval.run_all import SYSTEMS, _cli
+
+    if split not in ("dev", "test") or system not in SYSTEMS:
+        typer.echo(f"--split must be dev|test and --system one of {'|'.join(SYSTEMS)}", err=True)
+        raise typer.Exit(2)
+    argv = ["--split", split, "--system", system, *(["--force"] if force else [])]
+    raise typer.Exit(_cli(argv))
 
 
 @app.command()
@@ -152,7 +182,9 @@ def reshoot(
     edited: str = typer.Option(..., "--edited", help="Edited scene JSON (from the map editor)."),
     o: str = typer.Option(..., "-o", help="Output folder."),
     n: int = typer.Option(1, "--n", help="Takes to generate; the best by conformance is kept."),
-    mode: str = typer.Option("blockout", "--mode", help="blockout (map-exact guide) | text (fallback)."),
+    mode: str = typer.Option(
+        "blockout", "--mode", help="blockout (map-exact guide) | reproject (3D guide) | text (fallback)."
+    ),
     resolution: str = typer.Option("360p", "--resolution"),
     duration: str | None = typer.Option(
         None, "--duration", help="Cap, e.g. 6s (default: the original clip's length)."

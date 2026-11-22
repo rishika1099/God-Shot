@@ -1,4 +1,4 @@
-"""S12 × S14 integration: S12 owns camera, positions and length; with --direct the S14 director owns acting."""
+"""S12 × S14 integration: S12 owns camera, positions, length; with --direct the S14 director owns acting."""
 
 from __future__ import annotations
 
@@ -47,8 +47,8 @@ def fake_omni(orig_clip: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     def get(*, id):
         block = SimpleNamespace(type="video", data=video, uri=None)
-        return SimpleNamespace(id=id, status="completed", errors=None,
-                               steps=[SimpleNamespace(type="model_output", error=None, content=[block])])  # fmt: skip
+        step = SimpleNamespace(type="model_output", error=None, content=[block])
+        return SimpleNamespace(id=id, status="completed", errors=None, steps=[step])
 
     monkeypatch.setattr(
         reshoot, "get_client", lambda: SimpleNamespace(interactions=SimpleNamespace(create=create, get=get))
