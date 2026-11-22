@@ -536,12 +536,20 @@ def _add_hinged_laptop(
         ):
             sup_top = OBJ_Z.get(sup.type.lower(), (0.0, 0.90))[1]
             z_base = max(z_base, sup_top + 0.01)
-    # Orient the laptop screen so it faces the nearest actor (screen = +fwd toward actor)
+    # Lock static laptop orientation at t=0 so its screen faces the actor (opposite their facing_deg)
+    # and never spins around when the actor walks away later!
     yaw = obj.rotation_deg
     if scene.actors:
-        ax, ay, _, _ = geometry.interp_actor(scene.actors[0], t)
-        # Forward vector of laptop screen pointing toward actor: (-sin(yaw), cos(yaw)) ~ (ax-cx, ay-cy)
-        yaw = math.degrees(math.atan2(-(ax - cx), ay - cy))
+        ax0, ay0, f0, _ = geometry.interp_actor(scene.actors[0], 0.0)
+        # Actor looks along (-sin(f0), cos(f0)); laptop screen faces directly back toward actor (f0 + 180)
+        dx, dy = ax0 - cx, ay0 - cy
+        if math.hypot(dx, dy) > 0.15:
+            to_actor = math.degrees(math.atan2(-dx, dy))
+            face_back = geometry.wrap180(f0 + 180.0)
+            # Blend 50/50 between actor direction and opposite of actor facing so lid is clearly angled
+            yaw = geometry.wrap180(face_back + 0.5 * geometry.wrap180(to_actor - face_back))
+        else:
+            yaw = geometry.wrap180(f0 + 180.0)
 
     # Keyboard base slab (3cm thick, matte dark grey/black)
     for k, fp in enumerate(_box_faces(cx, cy, w, d, yaw, z_base, z_base + 0.035)):
@@ -985,8 +993,9 @@ NOVEL_VIEW_PROMPT = """You are comparing two rows of film frames at timestamps {
 Write a concise 3–4 sentence visual brief telling a video renderer how to turn the BOTTOM 3D-projected
 angle into a photorealistic shot that preserves 100% of the TOP row's physical action:
 1. Describe what room walls/background objects appear behind the subject from this NEW angle.
-2. Describe how key props (e.g. laptop, table, railing) are oriented relative to this NEW camera and how
-   they deform/move on impact.
+2. Describe how key props (e.g. laptop, table, railing) are oriented relative to this NEW camera from
+   the VERY FIRST FRAME (00:00.0) onward (e.g. matte black outer laptop lid facing camera from 00:00,
+   never starting backwards and spinning around) and how they deform/move on impact.
 3. Describe the exact peak physical action & timing visible across the sequence (e.g. arm wind-up,
    violent downward fist punch smashing the laptop flat, recoil, hand on forehead).
 Keep it under 550 characters, concrete, and strictly photorealistic.
@@ -1056,7 +1065,7 @@ def analyze_novel_view(
 
     try:
         text = cached(
-            [ingest.sha256_file(orig_clip), ingest.sha256_file(reproj_clip), model, "novel_view.v2"],
+            [ingest.sha256_file(orig_clip), ingest.sha256_file(reproj_clip), model, "novel_view.v3"],
             call,
             kind="novel_view",
         )

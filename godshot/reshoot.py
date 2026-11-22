@@ -775,6 +775,13 @@ def _camera_angle_shift_notes(
         )
     if shown:
         msg += f" Only show the visible set pieces from the blockout: {'; '.join(shown)}."
+    if med_diff >= 110.0:
+        msg += (
+            " FROM THE VERY FIRST FRAME (00:00.0) ONWARD, every prop/laptop is ALREADY oriented toward "
+            "the person (only the matte black outer back lid of an open laptop faces the camera from "
+            "00:00.0 — NEVER start frame 0 with a glowing screen facing the camera and NEVER have the "
+            "person pick up, spin, or flip the laptop around!)."
+        )
     return [msg], True
 
 
@@ -1157,9 +1164,13 @@ def reference_images(
     actor_ids = {a.id for a in scene_orig.actors}
     objs = list(scene_orig.objects)
     vis_obj_ids: set[str] | None = None
+    is_reverse_cam = False
     if scene_edited is not None:
         vis_obj_ids = _visible_object_ids(scene_edited, scene_edited.clip.duration_s)
         objs.sort(key=lambda o: 0 if o.id in vis_obj_ids else 1)
+        _, is_reverse_cam = _camera_angle_shift_notes(
+            scene_edited, scene_orig, scene_edited.clip.duration_s
+        )
     entities_for_crops = (
         list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *objs]
     )
@@ -1168,6 +1179,15 @@ def reference_images(
             break
         if vis_obj_ids is not None and e.id not in actor_ids and e.id not in vis_obj_ids and len(refs) >= 3:
             continue  # don't feed crops of background objects that are behind the edited camera
+        if (
+            is_reverse_cam
+            and e.id not in actor_ids
+            and any(
+                k in f"{e.type} {e.visual_description}".lower() for k in ("laptop", "screen", "monitor")
+            )
+            and len(refs) >= 3
+        ):
+            continue  # avoid blasting Omni with a front-facing green-screen crop on a 180° reverse shot!
         for f in (0.5, 0.3, 0.7, 0.1, 0.9):
             t = f * span
             cam = geometry.interp_camera(scene_orig, t)
@@ -1702,7 +1722,8 @@ ACTION_COMPARE_PROMPT = """Top row = ORIGINAL video frames at timestamps {labels
 Bottom row = AI RE-SHOOT of the same scene filmed from a DIFFERENT camera angle at the exact same timestamps.
 
 Compare frame-by-frame (IGNORING the intentional change in camera angle or framing):
-1. Physical action & prop reactions: is each person doing the same action/pose and do props react properly?
+1. Physical action & prop reactions: is each person doing the same action/pose and do props react properly
+   (NEVER starting a prop backwards at 00:00 and randomly flipping/turning it around mid-shot)?
 2. Wardrobe & identity separation: does each person keep ONLY their own face, hair, clothing, pants/leggings,
    and props (NEVER swapping or copying pants/leggings, robotic arm, hair, or face onto the wrong person)?
 
@@ -1720,8 +1741,8 @@ Then compute:
 
 
 def _pick_action_times(dur: float, beats: Sequence[dict[str, Any]] | None = None, k: int = 6) -> list[float]:
-    """Pick `k` matched timestamps across [0, dur], always hitting peak action beats & impact moments."""
-    base = [dur * f for f in (0.12, 0.30, 0.48, 0.66, 0.84)]
+    """Pick `k` matched timestamps across [0, dur], always checking frame 0 (0.2s) + peak action & impact."""
+    base = [0.2, dur * 0.28, dur * 0.48, dur * 0.68, dur * 0.86]
     extra: list[float] = []
     if beats:
         # Highlight shortest / highest-intensity action beats (mid-swing + immediate aftermath)
@@ -1830,7 +1851,7 @@ def compare_action_frames(
 
     try:
         data = cached(
-            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v2"],
+            [ingest.sha256_file(orig_clip), ingest.sha256_file(gen_clip), model, "action_compare.v3"],
             call,
             kind="action_compare",
         )
