@@ -608,16 +608,85 @@ def _actor_view_side(cam: tuple[float, float, float], ax: float, ay: float, faci
     return "side"
 
 
+def _visible_object_ids(scene: SceneV1, dur: float) -> set[str]:
+    """Object IDs that appear inside the edited camera's FOV at least once during the shot."""
+    if not scene.objects or dur <= 0:
+        return {o.id for o in scene.objects}
+    samples = [dur * i / 8 for i in range(9)]
+    hfov = scene.camera.hfov_deg
+    vis: set[str] = set()
+    for t in samples:
+        cam = geometry.interp_camera(scene, t)
+        for o in scene.objects:
+            if geometry.in_view(cam, (o.center[0], o.center[1]), hfov):
+                vis.add(o.id)
+    return vis
+
+
+def _camera_angle_shift_notes(
+    scene: SceneV1, scene_orig: SceneV1 | None, dur: float
+) -> tuple[list[str], bool]:
+    """Detect large camera angle shifts (e.g. Side 90° / Reverse 180°) vs scene_orig and list
+    original background objects that are now BEHIND THE CAMERA so Omni rotates the room instead of
+    just moving the actor in front of the old background."""
+    if scene_orig is None or dur <= 0:
+        return [], False
+    samples = [dur * i / 8 for i in range(9)]
+    diffs = sorted(
+        abs(
+            geometry.wrap180(
+                geometry.interp_camera(scene, t)[2]
+                - geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))[2]
+            )
+        )
+        for t in samples
+    )
+    med_diff = diffs[len(diffs) // 2]
+    if med_diff < 70.0:
+        return [], False
+    vis_ids = _visible_object_ids(scene, dur)
+    hidden = [o.visual_description for o in scene.objects if o.id not in vis_ids]
+    shown = [o.visual_description for o in scene.objects if o.id in vis_ids]
+    kind = "180° REVERSE CAMERA ANGLE" if med_diff >= 135.0 else f"NEW {med_diff:.0f}° CAMERA ANGLE"
+    msg = (
+        f"{kind}: The camera has physically moved to a DIFFERENT side of the set (~{med_diff:.0f}° "
+        "from the original shot) and is looking in a NEW direction. Rotate the ENTIRE room and "
+        "background to match the new camera viewpoint — NEVER keep the original camera's background "
+        "and merely reposition the person in front of it!"
+    )
+    if hidden:
+        msg += (
+            f" These items from the original background are now BEHIND THE CAMERA and MUST NOT appear "
+            f"in this shot: {'; '.join(hidden)}."
+        )
+    if shown:
+        msg += f" Only show the visible set pieces from the blockout: {'; '.join(shown)}."
+    return [msg], True
+
+
 def _viewpoint_notes(
     scene: SceneV1, dur: float, time_scale: float = 1.0, scene_orig: SceneV1 | None = None
 ) -> tuple[list[str], bool]:
-    """Explicitly state when the camera orbits behind any actor relative to the original shot."""
+    """Explicitly state whether the camera sees each actor's front, back, or side — ALWAYS matching
+    the 2D map & 3D blockout orientation (`facing_deg`) so text never contradicts the blockout."""
     if not scene.actors or dur <= 0:
         return [], False
     ts = lambda t: mmss(t / time_scale)[:5]  # noqa: E731
     samples = [dur * i / 8 for i in range(9)]
     notes: list[str] = []
     has_back = False
+    cam_shifted = False
+    if scene_orig is not None:
+        diffs = [
+            abs(
+                geometry.wrap180(
+                    geometry.interp_camera(scene, t)[2]
+                    - geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))[2]
+                )
+            )
+            for t in samples
+        ]
+        cam_shifted = max(diffs) >= 70.0
     for a in scene.actors:
         runs: list[tuple[str, float, float]] = []
         for t in samples:
@@ -625,33 +694,26 @@ def _viewpoint_notes(
             ax, ay, facing, vis = geometry.interp_actor(a, t)
             if not vis or not geometry.in_view(cam, (ax, ay), scene.camera.hfov_deg):
                 continue
-            # Prefer true geometric flip relative to scene_orig camera (immune to noisy extracted facing_deg)
-            if scene_orig is not None:
-                oc = geometry.interp_camera(scene_orig, min(t, scene_orig.clip.duration_s))
-                v_orig = (oc[0] - ax, oc[1] - ay)
-                v_edit = (cam[0] - ax, cam[1] - ay)
-                d_orig, d_edit = math.hypot(*v_orig), math.hypot(*v_edit)
-                if d_orig > 0.2 and d_edit > 0.2:
-                    cos_rel = (v_orig[0] * v_edit[0] + v_orig[1] * v_edit[1]) / (d_orig * d_edit)
-                    side = "back" if cos_rel < -0.45 else ("side" if cos_rel < 0.25 else "front")
-                else:
-                    side = "front"
-            else:
-                side = _actor_view_side(cam, ax, ay, facing)
+            side = _actor_view_side(cam, ax, ay, facing)
             if runs and runs[-1][0] == side:
                 runs[-1] = (side, runs[-1][1], t)
             else:
                 runs.append((side, t, t))
         for side, t0, t1 in runs:
+            span = f"{ts(t0)}–{ts(t1)}" if t1 > t0 else f"around {ts(t0)}"
             if side == "back":
                 has_back = True
-                span = f"{ts(t0)}–{ts(t1)}" if t1 > t0 else f"around {ts(t0)}"
                 notes.append(
-                    f"{span}: the camera orbits behind {a.visual_description} (reverse angle), "
-                    "viewing the back of their head and shoulders instead of their front"
+                    f"{span}: the camera is behind {a.visual_description}, viewing the back of their "
+                    "head and shoulders (matching the dark hair back of the head in the blockout)"
+                )
+            elif side == "front" and cam_shifted:
+                notes.append(
+                    f"{span}: {a.visual_description} is facing TOWARD the camera — show their face and "
+                    "front of their body across the scene (matching the dark visor face in the blockout)"
                 )
             elif side == "side" and t1 - t0 >= dur * 0.25:
-                notes.append(f"{ts(t0)}–{ts(t1)}: {a.visual_description} is viewed in side profile")
+                notes.append(f"{span}: {a.visual_description} is viewed in side profile")
     return notes, has_back
 
 
@@ -714,17 +776,20 @@ def describe_shot(
     lines.append(f"At the end: {f['end']}.")
     if f["actors"]:
         lines.append(f"Floor positions: {'; '.join(f['actors'])}.")
+    shift_notes, angle_shifted = _camera_angle_shift_notes(scene_edited, scene_orig, dur)
     vp_notes, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
     face_notes = _actor_facing_changes(scene_edited, scene_orig, dur)
+    if shift_notes:
+        lines += shift_notes
     if vp_notes or face_notes:
         lines.append("Camera viewpoint and actor facing (follow the blockout angle strictly):")
         lines += vp_notes + face_notes
     if beats:
-        if has_back:
+        if has_back or angle_shifted:
             lines.append(
                 "Performance actions (perform these EXACT physical actions and timing, viewed from the NEW "
-                "camera angle in the blockout — e.g. from behind when the camera orbits behind them; "
-                "ignore any original-camera left/right/foreground wording in the beats):"
+                "camera angle in the blockout; ignore any original-camera left/right/foreground wording in "
+                "the beats):"
             )
         else:
             lines.append("Performance (keep EXACTLY as in the original clip; only the camera changes):")
@@ -782,24 +847,30 @@ def edit_prompt(
     `directed=True` (S14): the director's PERFORMANCE / REQUESTED CHANGES sections (appended by
     `direct.compose`) say what the people do, so this base does not insist the acting is unchanged.
     """
+    dur = duration_s or scene_edited.clip.duration_s
+    _, angle_shifted = _camera_angle_shift_notes(scene_edited, scene_orig, dur)
+    _, has_back = _viewpoint_notes(scene_edited, dur, time_scale, scene_orig=scene_orig)
+    vis_obj_ids = _visible_object_ids(scene_edited, dur) if angle_shifted else None
+    objs_for_legend = (
+        [o for o in scene_edited.objects if o.id in vis_obj_ids] or list(scene_edited.objects)
+        if vis_obj_ids is not None
+        else list(scene_edited.objects)
+    )
     actor_ids = {a.id for a in scene_edited.actors}
     legend = [
         f"the {color_name(colors.get(e.id, e.color))} {'figure' if e.id in actor_ids else 'box'}"
         f" is {e.visual_description}"
-        for e in [*scene_edited.actors, *scene_edited.objects]
+        for e in [*scene_edited.actors, *objs_for_legend]
     ]
-    _, has_back = _viewpoint_notes(
-        scene_edited, duration_s or scene_edited.clip.duration_s, time_scale, scene_orig=scene_orig
-    )
     only = "Change ONLY the camera position, angle, point of view and field of view."
     if directed:
         keep, only = "What the people do is described in the PERFORMANCE section below.", ""
-    elif beats and has_back:
+    elif beats and (has_back or angle_shifted):
         keep = (
             "The people MUST still perform all the exact physical actions and timing in the performance "
             "beats below (gestures, strikes, object interactions, movement), viewed from the NEW camera "
-            "angle in the blockout (including from behind their head and shoulders when the camera is "
-            "behind them)."
+            "angle in the blockout — rotate the entire room/background to match the new camera angle "
+            "instead of reusing the original camera background."
         )
     elif beats:
         keep = (
@@ -917,8 +988,15 @@ def performance_beats(
 # --------------------------------------------------------------------------- reference images + label
 
 
-def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: int = MAX_REFS) -> list[Path]:
-    """≤ 6 refs: 3 keyframes from the ORIGINAL clip + crops around up to 3 entities (actors first).
+def reference_images(
+    clip: Path,
+    scene_orig: SceneV1,
+    out_dir: Path,
+    max_refs: int = MAX_REFS,
+    scene_edited: SceneV1 | None = None,
+) -> list[Path]:
+    """≤ 6 refs: keyframes from the ORIGINAL clip + crops around entities (actors first, then objects
+    visible in `scene_edited` when provided).
 
     Crops are bounding-box guesses from geometry: a vertical strip centred on the entity's screen_x at a
     time when it is clearly in frame.
@@ -937,12 +1015,19 @@ def reference_images(clip: Path, scene_orig: SceneV1, out_dir: Path, max_refs: i
     hfov = scene_orig.camera.hfov_deg
     span = min(dur, scene_orig.clip.duration_s)
     actor_ids = {a.id for a in scene_orig.actors}
+    objs = list(scene_orig.objects)
+    vis_obj_ids: set[str] | None = None
+    if scene_edited is not None:
+        vis_obj_ids = _visible_object_ids(scene_edited, scene_edited.clip.duration_s)
+        objs.sort(key=lambda o: 0 if o.id in vis_obj_ids else 1)
     entities_for_crops = (
-        list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *scene_orig.objects]
+        list(scene_orig.actors) if len(scene_orig.actors) >= 2 else [*scene_orig.actors, *objs]
     )
     for e in entities_for_crops:
         if len(refs) >= max_refs:
             break
+        if vis_obj_ids is not None and e.id not in actor_ids and e.id not in vis_obj_ids and len(refs) >= 3:
+            continue  # don't feed crops of background objects that are behind the edited camera
         for f in (0.5, 0.3, 0.7, 0.1, 0.9):
             t = f * span
             cam = geometry.interp_camera(scene_orig, t)
@@ -1054,7 +1139,9 @@ def reshoot(
         log.warning(
             "re-shoot: %.1f s shot played %.2fx faster to fit Omni's %.0f s", want, time_scale, out_len
         )
-    refs = reference_images(Path(clip), scene_orig, work / "refs", max_refs=MAX_REFS)
+    refs = reference_images(
+        Path(clip), scene_orig, work / "refs", max_refs=MAX_REFS, scene_edited=scene_edited
+    )
     ref_bytes = [r.read_bytes() for r in refs]
     directed = direction is not None
     beats = [] if directed else performance_beats(Path(clip), scene_orig)  # S14 director covers it
