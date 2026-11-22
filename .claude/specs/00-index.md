@@ -9,16 +9,16 @@ Update your row when you start (`in progress`) and finish (`done`).
 | S02 | Extract: Argon scene JSON (baseline) | Akash | S00, S01 | 1:45 | merged (#7); follow-up in review; path direction 1/2, prompt untuned |
 | S03 | Geometry: projection math | Siva | S00 | 1:15 | done |
 | S04 | Checks: scene → check.v1 | Rishika | S03 | 2:00 | done |
-| S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | in progress (code + offline tests done; live run pending `.env` + frames) |
-| S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | done (tos_001 44.9% → 100.0%, 0 regressions) |
+| S05 | Verify: Decisions API client | Siva | S04, S01 | 2:45 | done (used by the S06 loop) |
+| S06 | Correct + loop controller | Rishika | S02, S05 | 3:30 | done (dev check on tos_001: verifier pass rate 44.9% → 100.0%, not human-label accuracy) |
 | S07 | Render: animated overhead map | Akash | S00 | 2:00 | done |
 | S08 | Compose: 9:16 reel | Akash | S07, S01 | 2:30 | done (phone playback to confirm) |
-| S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | 5:00 | in progress (UI + editor + API done; reels need S07/S08) |
-| S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | in progress (40 CameraBench mapped + 11 Blender clips trimmed; labeling next) |
-| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | in progress (charts + score.py + run_all.py done; numbers need runs) |
-| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | in progress (code done + tested; awaiting S09 wiring) |
+| S09 | Web UI: upload, view, edit, cached demo | Siva | S08 | 5:00 | done (UI, editor, API, re-shoot, loop-log scores) |
+| S10 | Eval data: CameraBench + clips + labels | Rishika | S00 | 4:00 | in progress (40 CameraBench test clips labeled; 11 Blender clips still need human labels) |
+| S11 | Scoring + metrics + charts | Siva (score), Rishika (charts) | S03, S10, S06 | 5:00 | in progress (score.py, run_all.py, CLI, charts done; numbers need paid runs) |
+| S12 | Re-shoot with Omni + conformance | Prajesh | S06, S09 | 6:30 | done (blockout + 3D guide, best-of-2, action verification) |
 | S13 | Pitch: deck, demo script, failure gallery, backup video | Rishika (Akash: gallery) | S11 | 7:30 | in progress (script & deck outline drafted) |
-| S14 | Direct: scene analyst, interpreter, director + critic agents for re-shoots | Akash | S12, S05, S03 | — | in review |
+| S14 | Direct: scene analyst, interpreter, director + critic agents for re-shoots | Akash | S12, S05, S03 | — | done (CLI: --direct) |
 
 ## Notes
 - 2026-11-21: S04/S06 reassigned to Rishika; S05 stays with Siva.

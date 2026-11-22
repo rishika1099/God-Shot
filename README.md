@@ -219,7 +219,7 @@ Add `GEMINI_API_KEY` to `.env`, then install ffmpeg (`brew install ffmpeg` on ma
 To enable 3D reprojection, install the optional packages:
 
 ```bash
-pip install torch transformers mediapipe opencv-python
+pip install -r requirements-3d.txt
 ```
 
 Without them, re-shoots automatically use the map-exact blockout guide.
@@ -254,10 +254,10 @@ python -m godshot smoke
 python -m godshot baseline clips/shot.mp4 -o out/shot
 ```
 
-Run the full loop from Python:
+Run the full loop and render the reel:
 
 ```bash
-python -c "from godshot.pipeline import run; run('clips/shot.mp4', 'out/shot')"
+python -m godshot run clips/shot.mp4 -o out/shot
 ```
 
 Re-shoot from a map saved by the editor:
@@ -298,11 +298,25 @@ God-Shot's evaluation is designed to compare the one-call Argon baseline with th
 | Item | Current state on `main` |
 |---|---|
 | Dataset manifest | 51 clips: 40 CameraBench, 10 *Tears of Steel*, 1 *Sintel* |
-| Labels | 40 CameraBench clips with mapped expert camera-motion labels |
-| Scoring code | Not merged yet (`siva/s11-score`) |
+| Labels | 40 CameraBench test clips with mapped expert camera-motion labels. The 11 Blender clips still need human labels |
+| Scoring code | `eval/run_all.py` and `eval/score.py` |
 | Results and figures | Not published yet |
 
-We do not publish an accuracy claim until the scoring code has run on the frozen test split.
+Run and summarize the labeled test split (this makes paid API calls):
+
+```bash
+python -m godshot eval --split test --system baseline
+```
+
+```bash
+python -m godshot eval --split test --system full
+```
+
+```bash
+python eval/score.py summary --split test
+```
+
+We do not publish an accuracy claim until these runs finish on the frozen test split.
 
 ## Project structure
 
