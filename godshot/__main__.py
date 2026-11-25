@@ -186,6 +186,9 @@ def reshoot(
         "blockout", "--mode", help="blockout (map-exact guide) | reproject (3D guide) | text (fallback)."
     ),
     resolution: str = typer.Option("360p", "--resolution"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="omni | wan_vace (default: GODSHOT_RESHOOT_BACKEND, else omni)."
+    ),
     duration: str | None = typer.Option(
         None, "--duration", help="Cap, e.g. 6s (default: the original clip's length)."
     ),
@@ -206,6 +209,7 @@ def reshoot(
         mode=mode, resolution=resolution, duration=duration,
         direct=direct, score_preservation=preserve, w_preserve=w_preserve,
         request=request, critic_rounds=critic,
+        **({"backend": backend} if backend else {}),
     )  # fmt: skip
     typer.echo(f"{r['label']}: {r['video']}")
     score = f"{r['score']:.2f} ({r['hits']}/{r['usable']})"

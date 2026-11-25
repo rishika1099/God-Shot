@@ -116,6 +116,21 @@ Important details:
 - **Audio** from the original clip is carried into the 3D guide video.
 - **Every generated video** receives a visible "AI-generated re-shoot" label.
 
+### Optional backend: Wan VACE on fal.ai
+
+Omni is the default. Wan VACE 14B (`fal-ai/wan-vace-14b`) can generate the guided takes instead. It receives the same guide video with `task=depth`, so fal extracts depth from the guide and Wan paints the scene over that geometry, matching the guide's frame count and fps. Scoring, retries, and labels are unchanged.
+
+```bash
+pip install -r requirements-wan.txt
+```
+
+Then set `GODSHOT_RESHOOT_BACKEND=wan_vace` and `FAL_KEY` in `.env`, or pass `--backend wan_vace` to `reshoot`. Notes:
+
+- **Cost:** about $0.04 (480p) to $0.08 (720p) per output second, billed by fal.
+- **Privacy:** the guide and reference frames are uploaded to fal's CDN, where URLs are public. Uploads are set to expire after 1 hour.
+- **Text mode** (no guide) always uses Omni.
+- **Status:** tested offline only; no live fal run yet.
+
 ### Direct agents (CLI option)
 
 `--direct` adds a small agent team that directs performance and requested changes. It does not change the camera path or map positions.

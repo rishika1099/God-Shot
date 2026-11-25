@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from godshot.cache import CacheMiss, is_offline
+from godshot.config import load_config
 from godshot.edit import EditError, apply_edit, text_edit
 from godshot.schema import SceneV1
 
@@ -322,10 +323,11 @@ def reshoot_route(clip_id: str, body: EditBody) -> dict[str, Any]:
         from godshot import reproject, reshoot
 
         use_reproj = reproject.available()
+        engine = "Wan VACE" if load_config().RESHOOT_BACKEND == "wan_vace" else "Omni"
         job["stage"] = (
-            "3D projecting novel angle + generating 2 takes + action verification"
+            f"3D projecting novel angle + generating 2 takes ({engine}) + action verification"
             if use_reproj
-            else "generating 2 takes + frame-by-frame action verification"
+            else f"generating 2 takes ({engine}) + frame-by-frame action verification"
         )
         summary = reshoot.reshoot_best(
             clip,
