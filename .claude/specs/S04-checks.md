@@ -55,3 +55,4 @@ Turn a scene into 20–60 falsifiable yes/no or choice questions, each with an e
 - Motion pairs include both `(t, t+1.5)` windows and non-static `camera.motion_segments` intervals so slower moves (like the mock's 0–4 s dolly) emit DOLLY/TOWARD checks above threshold.
 - Calls `godshot.geometry` (S03) whenever implemented, with spec-compliant math fallbacks while S03 is unmerged on `main` (zero edits to Siva's `geometry.py`).
 - No contract changes needed.
+- 2026-11-25 (Rishika): VISIBLE / NOT_VISIBLE now use the object's outline (nearest edge to the optical axis) instead of its centre, matching the "visible, even partly" question. An actor with `visible=False` now predicts "not visible" (False) instead of abstaining. `mocks/checks_mock.json` check `5444abbb` was written with centre-only visibility and now abstains; the test documents it.

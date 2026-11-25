@@ -54,3 +54,4 @@ Turn runs + human labels into the slide numbers: baseline vs loop, verifier accu
     reported, never stops the rest; per-split report in `eval/runs/<system>/_run_<split>.json`.
   - Dry run: Rishika's 40 CameraBench test labels (`rishika/s10-eval-data`) load and score end to end.
   - Still open: real numbers need S02 + S06 merged, clips downloaded to `eval/clips/`, and own-clip layout labels.
+- 2026-11-25 (Rishika): `summarize_runs` compares baseline and full only on clips that have both runs (reports `unpaired_skipped`). Boolean label values given as strings ("false") are parsed correctly in `askable` and `score_scene`.

@@ -20,6 +20,7 @@ from godshot.checks import (
     _distance,
     _interp_actor,
     _interp_camera,
+    _nearest_abs_bearing,
     frames_needed,
     make_checks,
     predict,
@@ -131,10 +132,14 @@ def test_spot_checked_expectations_match_mock_checks_and_hand_reasoning() -> Non
     scene = SceneV1.load(MOCK_SCENE)
     mock_checks = load_checks(MOCK_CHECKS)
 
-    # Every single check in mocks/checks_mock.json must match predict(scene, c) == c.expected!
+    # Every check in mocks/checks_mock.json must match predict(scene, c) == c.expected, except one:
+    # the mock was hand-written with centre-only visibility. At t=3 the door's centre is 41.6° off axis
+    # but its near edge is 37.6°, inside the ±8° band around 30°, so predict now abstains on it.
+    centre_only = {"5444abbb"}
     assert len(mock_checks) >= 5
     for c in mock_checks:
-        assert predict(scene, c) == c.expected, f"mismatch on {c.check_id} ({c.template} @ t={c.t})"
+        want = None if c.check_id in centre_only else c.expected
+        assert predict(scene, c) == want, f"mismatch on {c.check_id} ({c.template} @ t={c.t})"
 
 
 def test_instructions_are_full_sentences_and_never_contain_ids() -> None:
@@ -185,10 +190,13 @@ def test_no_check_emitted_inside_abstain_margin_random_poses() -> None:
         for c in checks:
             cam = _interp_camera(scene, c.t)
             if c.template == "VISIBLE":
-                b = abs(_bearing_deg(cam, pos(c.entities[0], c.t)))
+                b = _nearest_abs_bearing(scene, c.entities[0], cam, pos(c.entities[0], c.t))
                 assert b < half - VISIBLE_MARGIN_DEG
             elif c.template == "NOT_VISIBLE":
-                b = abs(_bearing_deg(cam, pos(c.entities[0], c.t)))
+                ent = scene.entity(c.entities[0])
+                if isinstance(ent, Actor) and not _interp_actor(ent, c.t)[3]:
+                    continue  # the scene marks this actor hidden: a "not visible" claim at any bearing
+                b = _nearest_abs_bearing(scene, c.entities[0], cam, pos(c.entities[0], c.t))
                 assert b > half + VISIBLE_MARGIN_DEG
             elif c.template in ("SIDE_LEFT", "SIDE_RIGHT"):
                 b = abs(_bearing_deg(cam, pos(c.entities[0], c.t)))
@@ -260,7 +268,9 @@ def test_predict_cross_scene_mutations() -> None:
 
     # 6. NOT_VISIBLE outside hfov/2 + 8° is a prediction (False), not None
     not_vis = next(c for c in mock_checks if c.template == "NOT_VISIBLE" and c.entities == ["door_1"])
-    assert predict(scene, not_vis) is False
+    far = copy.deepcopy(scene)
+    far.objects[0].center = [-6.0, 6.0]  # whole door > 38° off axis at t=3
+    assert predict(far, not_vis) is False
     # Moving door_1 into the ±8° band around 30° returns None
     edge = copy.deepcopy(scene)
     # At t=3.0, cam=(0, 1.5, yaw=0); bearing 30° at dy=4.5 => x = -4.5*tan(30°) ≈ -2.60
@@ -273,3 +283,35 @@ def test_frames_needed_sorted_unique() -> None:
     ts = frames_needed(mock_checks)
     assert ts == sorted(set(ts))
     assert 0.0 in ts and 4.0 in ts and 8.0 in ts and 9.0 in ts
+
+
+def test_visible_uses_object_extent_not_centre() -> None:
+    """A wide object whose centre is out of frame but whose edge is in frame counts as visible."""
+    scene = SceneV1.load(MOCK_SCENE)
+    vis = next(
+        c for c in make_checks(scene, Path("frames/mock_001")) if c.template in ("VISIBLE", "NOT_VISIBLE")
+    )
+    wide = copy.deepcopy(scene)
+    cam = _interp_camera(wide, vis.t)
+    # Centre 45° to the camera's right at distance 5, 6 units wide: the left edge reaches the axis.
+    th = math.radians(cam[2] - 45.0)
+    centre = [cam[0] - 5.0 * math.sin(th), cam[1] + 5.0 * math.cos(th)]
+    wide.objects[0].center = centre
+    wide.objects[0].size = [6.0, 0.2]
+    wide.objects[0].rotation_deg = cam[2] - 45.0
+    probe = vis.model_copy(update={"entities": [wide.objects[0].id]})
+    assert abs(_bearing_deg(cam, (centre[0], centre[1]))) > 30.0 + VISIBLE_MARGIN_DEG
+    assert predict(wide, probe) is True
+
+
+def test_hidden_actor_predicts_not_visible() -> None:
+    """visible=False is the scene's claim that the actor can't be seen, so it predicts False, not None."""
+    scene = SceneV1.load(MOCK_SCENE)
+    hidden = copy.deepcopy(scene)
+    for k in hidden.actors[0].track:
+        k.visible = False
+    vis = next(
+        c for c in make_checks(scene, Path("frames/mock_001")) if c.template in ("VISIBLE", "NOT_VISIBLE")
+    )
+    probe = vis.model_copy(update={"entities": [hidden.actors[0].id]})
+    assert predict(hidden, probe) is False

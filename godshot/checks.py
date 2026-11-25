@@ -177,6 +177,25 @@ def _entity_pose(scene: SceneV1, entity_id: str, t: float) -> tuple[tuple[float,
     return None
 
 
+def _nearest_abs_bearing(
+    scene: SceneV1, entity_id: str, cam: tuple[float, float, float], p: tuple[float, float]
+) -> float:
+    """|bearing| of the part of the entity nearest the optical axis.
+
+    The visibility question asks whether an entity is visible "even partly", so a large object whose
+    centre is just outside the frame but whose edge is inside counts as visible. Objects use their
+    outline (S03 `object_bearing_range`); actors are points.
+    """
+    for obj in scene.objects:
+        if obj.id == entity_id:
+            try:
+                lo, hi = _geom.object_bearing_range(cam, obj)
+            except NotImplementedError:
+                break
+            return 0.0 if lo <= 0.0 <= hi else min(abs(lo), abs(hi))
+    return abs(_bearing_deg(cam, p))
+
+
 def _evaluate(
     scene: SceneV1,
     template: Template,
@@ -199,11 +218,12 @@ def _evaluate(
         if pose is None:
             return None, None
         p, visible_flag = pose
+        if not visible_flag:
+            # The scene says the actor cannot be seen: that is a claim ("not visible"), not an abstention.
+            return False, None
         cam = _interp_camera(scene, t)
-        b = abs(_bearing_deg(cam, p))
+        b = _nearest_abs_bearing(scene, entities[0], cam, p)
         if template == "VISIBLE":
-            if not visible_flag:
-                return None, None
             if b < half_fov - VISIBLE_MARGIN_DEG:
                 return True, round(half_fov - b, 1)
             if b > half_fov + VISIBLE_MARGIN_DEG:
@@ -212,7 +232,7 @@ def _evaluate(
         # NOT_VISIBLE: outside hfov + 8° is a prediction (False), not an abstention
         if b > half_fov + VISIBLE_MARGIN_DEG:
             return False, round(b - half_fov, 1)
-        if visible_flag and b < half_fov - VISIBLE_MARGIN_DEG:
+        if b < half_fov - VISIBLE_MARGIN_DEG:
             return True, round(half_fov - b, 1)
         return None, None
 

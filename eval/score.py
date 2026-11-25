@@ -161,7 +161,7 @@ def score_scene(scene: SceneV1, label: LabelV1) -> list[dict[str, Any]]:
         except _Unresolved as e:
             log.debug("%s/%s unresolved: %s", label.clip_id, lb.label_id, e)
             pred, unresolved = None, True
-        truth = _norm(lb.value)
+        truth = _as_bool(lb.value) if lb.type in ("A_LEFT_OF_B", "TOWARD") else _norm(lb.value)
         out.append(
             {
                 "label_id": lb.label_id,
@@ -181,6 +181,13 @@ def score_scene(scene: SceneV1, label: LabelV1) -> list[dict[str, Any]]:
 Askable = tuple[str, list[str], float, float | None, bool | str]
 
 
+def _as_bool(v: bool | str) -> bool:
+    """Label truth as a bool. A string "false"/"no"/"0" is False (plain bool() would make it True)."""
+    if isinstance(v, bool):
+        return v
+    return v.strip().lower() in ("true", "yes", "1")
+
+
 def askable(lb: Label) -> Askable | None:
     """Turn a human label into the S04 question it corresponds to, or None if there is none.
 
@@ -190,11 +197,11 @@ def askable(lb: Label) -> Askable | None:
     if lb.type == "SIDE" and lb.subject and lb.t is not None:
         return "SIDE_LEFT", [lb.subject], lb.t, None, v == "left"
     if lb.type == "A_LEFT_OF_B" and lb.a and lb.b and lb.t is not None:
-        return "A_LEFT_OF_B", [lb.a, lb.b], lb.t, None, bool(lb.value)
+        return "A_LEFT_OF_B", [lb.a, lb.b], lb.t, None, _as_bool(lb.value)
     if lb.type == "CLOSER" and lb.a and lb.b and lb.t is not None:
         return "CLOSER", [lb.a, lb.b], lb.t, None, "a_first" if v == "a" else "b_second"
     if lb.type == "TOWARD" and lb.subject and lb.t0 is not None and lb.t1 is not None:
-        return "TOWARD", [lb.subject], lb.t0, lb.t1, bool(lb.value)
+        return "TOWARD", [lb.subject], lb.t0, lb.t1, _as_bool(lb.value)
     if lb.type == "CAM_ROTATION" and v in ("pan_left", "pan_right"):
         return "PAN", [], lb.t0 or 0.0, lb.t1, v
     if lb.type == "CAM_TRANSLATION" and v in ("dolly_in", "dolly_out"):
@@ -291,15 +298,17 @@ def verifier_vs_human(
 
 
 def summarize_runs(labels: Iterable[LabelV1], runs_dir: Path = RUNS_DIR) -> dict[str, dict[str, Any]]:
-    """Accuracy per system (baseline = scene_r0, full = scene_final) over the clips that have runs."""
+    """Accuracy per system (baseline = scene_r0, full = scene_final) over clips that have BOTH runs."""
+    systems = (("baseline", "scene_r0.json"), ("full", "scene_final.json"))
+    labels = list(labels)
+    # Paired comparison: only clips that have BOTH outputs, so the two accuracies cover the same clips.
+    paired = [rec for rec in labels if all((runs_dir / s / rec.clip_id / f).exists() for s, f in systems)]
     out: dict[str, dict[str, Any]] = {}
-    for system, fname in (("baseline", "scene_r0.json"), ("full", "scene_final.json")):
+    for system, fname in systems:
         n = correct = unresolved = clips = 0
         by_type: dict[str, list[int]] = {}
-        for rec in labels:
+        for rec in paired:
             p = runs_dir / system / rec.clip_id / fname
-            if not p.exists():
-                continue
             clips += 1
             for r in score_scene(SceneV1.load(p), rec):
                 n += 1
@@ -314,6 +323,7 @@ def summarize_runs(labels: Iterable[LabelV1], runs_dir: Path = RUNS_DIR) -> dict
             "accuracy": correct / n if n else None,
             "unresolved": unresolved,
             "by_type": {k: c / t for k, (c, t) in sorted(by_type.items())},
+            "unpaired_skipped": len(labels) - len(paired),
         }
     return out
 
