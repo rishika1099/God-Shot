@@ -1443,6 +1443,10 @@ def reshoot_best(
             brief = direct_mod.analyze_scene(clip, scene_orig)
 
     action_beats = performance_beats(Path(clip), scene_orig) if verify_actions else None
+    # A `duration` cap re-shoots only the start of the scene: score takes against that span, not all of it.
+    full_s = scene_edited.clip.duration_s
+    span_s = full_s if kwargs.get("duration") is None else min(full_s, _seconds(kwargs["duration"]))
+    span_kw: dict[str, float] = {} if span_s >= full_s else {"scene_t1": span_s}
     shared_extra: dict[str, Any] = {}
     if kwargs.get("mode") == "reproject" and "guide_override" not in kwargs:
         from godshot import reproject
@@ -1492,13 +1496,14 @@ def reshoot_best(
     def score(k: int, path: Path) -> dict[str, Any]:
         # score the UNLABELLED video (the badge could confuse the verifier)
         raw = work_dir_for(path) / "raw.mp4"
-        conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance")
+        conf = conformance(raw, scene_edited, work_dir=work_dir_for(path) / "conformance", **span_kw)
         row = {"take": k + 1, "video": str(path), "score": conf["score"], "hits": conf["hits"],
                "usable": conf["usable"], "conformance": conf}  # fmt: skip
         if verify_actions:
             act = compare_action_frames(
-                clip, raw, beats=action_beats, work_dir=work_dir_for(path) / "action_compare"
-            )
+                clip, raw, beats=action_beats, work_dir=work_dir_for(path) / "action_compare",
+                **({"orig_t1": span_s} if span_kw else {}),
+            )  # fmt: skip
             if act is not None:
                 row |= {
                     "action_score": act["action_score"],
@@ -1523,8 +1528,11 @@ def reshoot_best(
             }  # fmt: skip
         return row
 
-    def rank(r: dict[str, Any]) -> tuple[float, int]:
-        return (r.get("combined", r["score"]), r["usable"])
+    def rank(r: dict[str, Any]) -> tuple[bool, float, int]:
+        # With action verification on, a take whose action check failed to run must not outrank a verified
+        # one just because its conformance-only score sits on a different (higher) scale.
+        verified = not verify_actions or "action_score" in r
+        return (verified, r.get("combined", r["score"]), r["usable"])
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, n))) as pool:
         takes = list(pool.map(lambda k: score(k, make(k, pack)), range(n)))
@@ -1604,8 +1612,16 @@ def reshoot_best(
     return summary
 
 
-def conformance(generated_clip: Path, scene_edited: SceneV1, work_dir: Path | None = None) -> dict[str, Any]:
+def conformance(
+    generated_clip: Path,
+    scene_edited: SceneV1,
+    work_dir: Path | None = None,
+    scene_t1: float | None = None,
+) -> dict[str, Any]:
     """How well a generated clip follows the EDITED map, scored on the shared-bank rule.
+
+    `scene_t1`: the scene time the generated clip covers (a `--duration` cap re-shoots only [0, scene_t1]).
+    Default: the whole edited scene. Checks after it are dropped and times map onto [0, scene_t1].
 
     checks = S04 make_checks(scene_edited) → frames from the generated clip (check times rescaled to its
     duration) → S05 verify (raw answers) → hit when S04 predict(scene_edited, c) == S05 observed(raw).
@@ -1626,9 +1642,14 @@ def conformance(generated_clip: Path, scene_edited: SceneV1, work_dir: Path | No
     work_dir = Path(work_dir) if work_dir else generated_clip.parent / f"{generated_clip.stem}_conformance"
     frames_dir = work_dir / "frames"
     gen = ingest.probe(generated_clip, check_length=False)
-    scale = gen.duration_s / scene_edited.clip.duration_s
+    span = scene_edited.clip.duration_s if scene_t1 is None else min(scene_t1, scene_edited.clip.duration_s)
+    scale = gen.duration_s / span
 
-    bank = checks_mod.make_checks(scene_edited, frames_dir=frames_dir)
+    bank = [
+        c
+        for c in checks_mod.make_checks(scene_edited, frames_dir=frames_dir)
+        if c.t <= span + 1e-6 and (c.t_end is None or c.t_end <= span + 1e-6)
+    ]
     raw_dir = work_dir / "raw_frames"
     for t in checks_mod.frames_needed(bank):  # extract at the rescaled time, store under the scene time
         target = frames_dir / ingest.frame_name(t)
@@ -1670,6 +1691,7 @@ def conformance(generated_clip: Path, scene_edited: SceneV1, work_dir: Path | No
         "n_checks": len(rows),
         "by_template": by_template,
         "time_scale": round(scale, 4),
+        "scene_t1": round(span, 3),
         "source": str(generated_clip),
         "checks": rows,
     }
@@ -1717,6 +1739,13 @@ Then compute:
 - correction: 1–2 concrete sentences telling the video generator EXACTLY what physical action, prop, or
   wardrobe/identity bug to fix (with timestamps) on the next take. Leave empty string if action_score >= 0.85.
 """
+
+
+def action_score_from(parsed: ActionComparison) -> float:
+    """Fraction of matched frames, counted in code (the model's arithmetic can disagree with its flags)."""
+    if parsed.frames:
+        return round(sum(f.match for f in parsed.frames) / len(parsed.frames), 3)
+    return round(parsed.action_score, 3)
 
 
 def _pick_action_times(dur: float, beats: Sequence[dict[str, Any]] | None = None, k: int = 6) -> list[float]:
@@ -1767,11 +1796,14 @@ def compare_action_frames(
     beats: Sequence[dict[str, Any]] | None = None,
     work_dir: Path | None = None,
     model: str | None = None,
+    orig_t1: float | None = None,
 ) -> dict[str, Any] | None:
     """Compare original vs generated video frame-by-frame on a Before/After contact sheet using Gemini.
 
     Scores whether the actor performs the SAME physical actions & prop interactions (ignoring the
     camera angle change) and returns a targeted correction string if anything is missed.
+    `orig_t1`: the original-clip time the generated clip covers (a `--duration` cap); default: all of it.
+    `action_score` is recomputed from the per-frame `match` flags whenever the model returns them.
     """
     from google.genai import types
 
@@ -1789,10 +1821,12 @@ def compare_action_frames(
         return None
     out_dir = Path(work_dir) if work_dir else gen_clip.parent / "action_compare"
     out_dir.mkdir(parents=True, exist_ok=True)
-    times = _pick_action_times(o_info.duration_s, beats=beats, k=6)
+    span = o_info.duration_s if orig_t1 is None else min(orig_t1, o_info.duration_s)
+    in_span = [b for b in beats or [] if float(b.get("t0", 0.0)) < span]
+    times = _pick_action_times(span, beats=in_span, k=6)
     o_last = o_info.duration_s - 1.2 / o_info.fps
     g_last = g_info.duration_s - 1.2 / g_info.fps
-    scale = g_info.duration_s / max(o_info.duration_s, 0.1)
+    scale = g_info.duration_s / max(span, 0.1)
 
     tw, th, hdr = 320, 180, 22
     sheet = Image.new("RGB", (tw * len(times), th * 2 + hdr), (18, 20, 24))
@@ -1839,7 +1873,7 @@ def compare_action_frames(
         log.warning("action compare unavailable (%s: %s)", type(e).__name__, e)
         return None
     res = {
-        "action_score": round(parsed.action_score, 3),
+        "action_score": action_score_from(parsed),
         "frames": [f.model_dump() for f in parsed.frames],
         "correction": parsed.correction.strip(),
         "sheet": str(sheet_path),

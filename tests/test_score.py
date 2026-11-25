@@ -344,3 +344,32 @@ def test_run_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     again = {r["clip_id"]: r for r in run_all.main("dev", "full", runs_dir=runs)}
     assert again["ok"]["status"] == "skipped"
     assert sorted(calls) == ["bad.mp4", "bad.mp4", "ok.mp4"]
+
+
+def test_summarize_runs_compares_only_paired_clips(tmp_path: Path, scene_mock: SceneV1) -> None:
+    """A clip with only a baseline run must not count toward baseline accuracy (unpaired comparison)."""
+    side = {
+        "label_id": "L1",
+        "type": "SIDE",
+        "t": 1.0,
+        "subject": "the man in the red hoodie",
+        "value": "right",
+    }
+    paired = _labels([side])
+    lonely = _labels([side], clip_id="mock_002")
+    right = scene_mock.model_copy(deep=True)
+    for k in right.actors[0].track:
+        k.x = -k.x
+    right.save(tmp_path / "baseline" / "mock_001" / "scene_r0.json")
+    right.save(tmp_path / "full" / "mock_001" / "scene_final.json")
+    scene_mock.save(tmp_path / "baseline" / "mock_002" / "scene_r0.json")  # no full run for mock_002
+    s = sc.summarize_runs([paired, lonely], tmp_path)
+    assert s["baseline"]["clips"] == s["full"]["clips"] == 1
+    assert s["baseline"]["accuracy"] == 1.0
+    assert s["baseline"]["unpaired_skipped"] == 1
+
+
+def test_string_booleans_in_labels() -> None:
+    assert sc._as_bool("false") is False and sc._as_bool("True") is True and sc._as_bool(False) is False
+    lb = _labels([{"label_id": "L1", "type": "A_LEFT_OF_B", "t": 1.0, "a": "x", "b": "y", "value": "false"}])
+    assert sc.askable(lb.labels[0])[-1] is False

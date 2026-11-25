@@ -492,3 +492,77 @@ def test_performance_beats_failure_falls_back_to_empty(
     monkeypatch.setattr(ingest, "upload", lambda c: (_ for _ in ()).throw(RuntimeError("no network")))
     assert reshoot.performance_beats(clip, SceneV1.load(MOCK)) == []
     load_config.cache_clear()
+
+
+def test_action_score_is_counted_from_frame_flags() -> None:
+    """The model said 0.9 but matched only 1 of 3 frames: the score must come from the flags."""
+    frames = [
+        reshoot.ActionFrameCheck(t_label=f"0{i}", orig_action="a", gen_action="b", match=i == 0)
+        for i in range(3)
+    ]
+    parsed = reshoot.ActionComparison(action_score=0.9, frames=frames)
+    assert reshoot.action_score_from(parsed) == 0.333
+    assert reshoot.action_score_from(reshoot.ActionComparison(action_score=0.7)) == 0.7
+
+
+def test_reshoot_best_unverified_take_cannot_outrank_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Take 2's action check failed: its conformance-only 0.80 must not beat take 1's combined 0.7."""
+
+    def fake_reshoot(clip, so, se, out, take=0, **kw):
+        out = Path(out)
+        reshoot.work_dir_for(out).mkdir(parents=True, exist_ok=True)
+        (reshoot.work_dir_for(out) / "raw.mp4").write_bytes(b"raw")
+        out.write_bytes(f"take{take}".encode())
+        return out
+
+    def fake_conf(raw, scene, work_dir=None, **kw):
+        take = int(Path(raw).parent.name.split("_")[1]) - 1
+        s = (0.8, 0.8)[take]
+        return {"score": s, "hits": 16, "usable": 20, "checks": []}
+
+    def fake_action(clip, raw, beats=None, work_dir=None, **kw):
+        take = int(Path(raw).parent.name.split("_")[1]) - 1
+        return None if take == 1 else {"action_score": 0.9, "frames": [], "correction": ""}
+
+    monkeypatch.setattr(reshoot, "reshoot", fake_reshoot)
+    monkeypatch.setattr(reshoot, "conformance", fake_conf)
+    monkeypatch.setattr(reshoot, "compare_action_frames", fake_action)
+    monkeypatch.setattr(reshoot, "performance_beats", lambda clip, scene: [])
+    scene = SceneV1.load(MOCK)
+    r = reshoot.reshoot_best(
+        Path("clip.mp4"), scene, scene, tmp_path, n=2, verify_actions=True, action_retries=0
+    )
+    assert r["best_take"] == 1
+
+
+def test_conformance_honours_a_duration_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 4 s re-shoot of a 10 s scene: checks after 4 s are dropped and 4 s of scene maps onto the clip."""
+    from godshot import checks as checks_mod
+    from godshot import ingest
+    from godshot import verify as verify_mod
+
+    scene = SceneV1.load(MOCK)
+    bank = checks_mod.make_checks(scene, frames_dir=tmp_path / "frames")
+    assert any(c.t > 4.0 for c in bank)
+    grabbed: list[float] = []
+
+    def fake_frame_at(clip, t, out_dir):
+        grabbed.append(t)
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(out_dir) / f"{round(t * 1000):06d}.jpg"
+        p.write_bytes(b"jpg")
+        return p
+
+    monkeypatch.setattr(
+        ingest, "probe", lambda clip, check_length=False: SimpleNamespace(duration_s=8.0, fps=24.0)
+    )
+    monkeypatch.setattr(ingest, "frame_at", fake_frame_at)
+    monkeypatch.setattr(verify_mod, "verify", lambda checks, frames_dir: {})
+    clip = tmp_path / "gen.mp4"
+    clip.write_bytes(b"x")
+    r = reshoot.conformance(clip, scene, work_dir=tmp_path / "w", scene_t1=4.0)
+    assert r["scene_t1"] == 4.0 and r["time_scale"] == 2.0
+    assert r["n_checks"] == sum(1 for c in bank if c.t <= 4.0 and (c.t_end is None or c.t_end <= 4.0))
+    assert grabbed and max(grabbed) <= 8.0
