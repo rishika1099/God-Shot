@@ -27,6 +27,9 @@ from godshot import geometry
 from godshot.cache import cached
 from godshot.config import get_client, load_config
 from godshot.schema import SceneV1, mmss
+from godshot.wan_vace import WanError
+
+BACKENDS = ("omni", "wan_vace")
 
 log = logging.getLogger(__name__)
 
@@ -1261,6 +1264,7 @@ def reshoot(
     guide_override: Path | None = None,
     novel_view_brief: str = "",
     minimal_refs: bool = False,
+    backend: str | None = None,
 ) -> Path:
     """Edited map → new AI-generated shot that follows it. Returns the LABELLED mp4 at `out`.
 
@@ -1278,6 +1282,12 @@ def reshoot(
     """
     if mode not in ("blockout", "reproject", "text"):
         raise ValueError(f"mode must be 'blockout', 'reproject', or 'text', got {mode!r}")
+    backend = (backend or load_config().RESHOOT_BACKEND).lower()
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
+    if backend == "wan_vace" and mode == "text":
+        log.warning("wan_vace needs a guide video; text mode uses Omni")
+        backend = "omni"
     work = work_dir_for(out)
     work.mkdir(parents=True, exist_ok=True)
     full = scene_edited.clip.duration_s
@@ -1345,7 +1355,7 @@ def reshoot(
             reproject_mode=(effective_mode == "reproject"), novel_view_brief=nv_brief,
         )  # fmt: skip
         prompt = _directed(base, direction) + fix_line + suffix
-        generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
+        _generate_guided(backend, refs, ref_bytes, prompt, raw, guide, resolution)
     elif mode == "blockout":
         colors = blockout_palette(scene_edited)
         guide = render_blockout(
@@ -1356,7 +1366,7 @@ def reshoot(
             directed=directed, scene_orig=scene_orig,
         )  # fmt: skip
         prompt = _directed(base, direction) + fix_line + suffix
-        generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide.read_bytes(), task="edit")
+        _generate_guided(backend, refs, ref_bytes, prompt, raw, guide, resolution)
     else:
         base = describe_shot(
             scene_edited, want, polish=polish, beats=beats, orig_hfov=orig_hfov, time_scale=time_scale,
@@ -1367,7 +1377,8 @@ def reshoot(
     out = burn_label(raw, Path(out))
     meta = {
         "label": AI_LABEL,
-        "model": load_config().MODEL_RESHOOT,
+        "backend": backend,
+        "model": load_config().MODEL_WAN if backend == "wan_vace" else load_config().MODEL_RESHOOT,
         "mode": effective_mode,
         "take": take,
         "directed": directed,
@@ -1384,6 +1395,24 @@ def reshoot(
     }
     (work / "reshoot.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return out
+
+
+def _generate_guided(
+    backend: str,
+    refs: Sequence[Path],
+    ref_bytes: Sequence[bytes],
+    prompt: str,
+    raw: Path,
+    guide: Path,
+    resolution: str,
+) -> Path:
+    """Guide video + refs + prompt → raw take, on the chosen backend (Omni `edit` or Wan VACE depth)."""
+    if backend == "wan_vace":
+        from godshot import wan_vace
+
+        return wan_vace.generate_video(refs, prompt, raw, guide=guide, resolution=resolution)
+    guide_bytes = guide.read_bytes()
+    return generate_video(ref_bytes, prompt, raw, resolution=resolution, guide=guide_bytes, task="edit")
 
 
 def _directed(prompt: str, direction: Any | None) -> str:
@@ -1479,7 +1508,7 @@ def reshoot_best(
             return reshoot(
                 clip, scene_orig, scene_edited, out, take=k, direction=take_pack, **extra, **kwargs
             )
-        except OmniError as e:  # generic INVALID_ARGUMENT, more often on long prompts: retry once, compact
+        except (OmniError, WanError) as e:  # e.g. INVALID_ARGUMENT on long prompts: retry once, compact
             log.warning("take %d failed (%s); retrying once with a compact prompt", k + 1, e)
             if take_pack is not None:
                 from dataclasses import replace

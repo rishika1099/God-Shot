@@ -31,6 +31,7 @@ All IDs are read from `.env` through `godshot/config.py`. **VERIFY each ID with 
 - Timestamps in prompts: `MM:SS.sss` when sampling above 1 fps.
 - Decisions API: question instructions are TEXT ONLY and the model never sees question keys, so every instruction must be a full sentence. `choice` keys are sorted alphabetically; use `other` as the catch-all. `noul` returns p(yes) clamped to 0.01–0.99.
 - Decisions has no context caching: identical inputs are billed twice (it's cheap anyway). Use our disk cache.
+- Optional re-shoot backend (S12): `fal-ai/wan-vace-14b` (`GODSHOT_MODEL_WAN`, task `GODSHOT_WAN_TASK=depth`), chosen with `GODSHOT_RESHOOT_BACKEND=wan_vace`, needs `FAL_KEY`. Guided modes only; text mode stays on Omni.
 - Omni: ≤15 s per output; generations take ~30–90 s; run in parallel in the background; never generate live on stage.
 - Today we have Tier 3 credits for all Gemini 4 models. Still set a billing cap.
 

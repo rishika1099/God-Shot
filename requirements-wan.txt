@@ -1,0 +1,3 @@
+# Optional: Wan VACE re-shoot backend on fal.ai (GODSHOT_RESHOOT_BACKEND=wan_vace, needs FAL_KEY).
+-r requirements.txt
+fal-client>=1.0.3

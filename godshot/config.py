@@ -26,6 +26,10 @@ _DEFAULTS: dict[str, str] = {
     "GODSHOT_MODEL_VERIFY": "gemini-decision-1",
     "GODSHOT_MODEL_RESHOOT": "gemini-omni-1.2-flash",
     "GODSHOT_MODEL_IMAGE": "",
+    # Re-shoot video backend: omni (Gemini Omni, default) | wan_vace (Wan VACE 14B on fal.ai, needs FAL_KEY).
+    "GODSHOT_RESHOOT_BACKEND": "omni",
+    "GODSHOT_MODEL_WAN": "fal-ai/wan-vace-14b",
+    "GODSHOT_WAN_TASK": "depth",
     "GODSHOT_FPS": "4",
     "GODSHOT_MAX_ROUNDS": "3",
     "GODSHOT_PASS_THRESHOLD": "0.7",
@@ -47,15 +51,20 @@ class Config:
     MODEL_VERIFY: str
     MODEL_RESHOOT: str
     MODEL_IMAGE: str
+    RESHOOT_BACKEND: str
+    MODEL_WAN: str
+    WAN_TASK: str
     FPS: int
     MAX_ROUNDS: int
     PASS_THRESHOLD: float
     FAIL_THRESHOLD: float
     CACHE_DIR: str
+    FAL_KEY: str = ""
 
     def __repr__(self) -> str:  # never leak the key into logs
-        fields = {k: v for k, v in self.__dict__.items() if k != "API_KEY"}
-        return f"Config(API_KEY=<{'set' if self.API_KEY else 'missing'}>, {fields})"
+        fields = {k: v for k, v in self.__dict__.items() if k not in ("API_KEY", "FAL_KEY")}
+        api, fal = ("set" if k else "missing" for k in (self.API_KEY, self.FAL_KEY))
+        return f"Config(API_KEY=<{api}>, FAL_KEY=<{fal}>, {fields})"
 
 
 def _env(name: str) -> str:
@@ -84,11 +93,15 @@ def load_config(require_key: bool = False) -> Config:
         MODEL_VERIFY=_env("GODSHOT_MODEL_VERIFY"),
         MODEL_RESHOOT=_env("GODSHOT_MODEL_RESHOOT"),
         MODEL_IMAGE=_env("GODSHOT_MODEL_IMAGE"),
+        RESHOOT_BACKEND=_env("GODSHOT_RESHOOT_BACKEND").lower(),
+        MODEL_WAN=_env("GODSHOT_MODEL_WAN"),
+        WAN_TASK=_env("GODSHOT_WAN_TASK"),
         FPS=int(_env("GODSHOT_FPS")),
         MAX_ROUNDS=int(_env("GODSHOT_MAX_ROUNDS")),
         PASS_THRESHOLD=float(_env("GODSHOT_PASS_THRESHOLD")),
         FAIL_THRESHOLD=float(_env("GODSHOT_FAIL_THRESHOLD")),
         CACHE_DIR=_resolve_cache_dir(_env("GODSHOT_CACHE_DIR")),
+        FAL_KEY=os.environ.get("FAL_KEY", "").strip(),
     )
 
 

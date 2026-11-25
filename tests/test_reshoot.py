@@ -566,3 +566,29 @@ def test_conformance_honours_a_duration_cap(tmp_path: Path, monkeypatch: pytest.
     assert r["scene_t1"] == 4.0 and r["time_scale"] == 2.0
     assert r["n_checks"] == sum(1 for c in bank if c.t <= 4.0 and (c.t_end is None or c.t_end <= 4.0))
     assert grabbed and max(grabbed) <= 8.0
+
+
+@needs_ffmpeg
+def test_reshoot_wan_vace_backend_end_to_end(
+    orig_clip: Path, fake_omni: FakeInteractions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from godshot import wan_vace
+
+    seen: dict = {}
+
+    def fake_wan(refs, prompt, out, guide, resolution="360p", client=None):
+        seen.update(guide=Path(guide), n_refs=len(refs), prompt=prompt)
+        Path(out).write_bytes(orig_clip.read_bytes())
+        return Path(out)
+
+    monkeypatch.setattr(wan_vace, "generate_video", fake_wan)
+    scene = SceneV1.load(MOCK)
+    out = reshoot.reshoot(
+        orig_clip, scene, scene, tmp_path / "w" / "reshoot.mp4", duration="4s", backend="wan_vace"
+    )
+    assert out.exists() and seen["guide"].name == "blockout.mp4" and seen["guide"].exists()
+    assert fake_omni.kwargs is None or "generation_config" not in fake_omni.kwargs  # Omni never generated
+    meta = json.loads((reshoot.work_dir_for(out) / "reshoot.json").read_text())
+    assert meta["backend"] == "wan_vace" and meta["model"] == "fal-ai/wan-vace-14b"
+    with pytest.raises(ValueError):
+        reshoot.reshoot(orig_clip, scene, scene, tmp_path / "x.mp4", backend="sora")
